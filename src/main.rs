@@ -4,6 +4,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use chrono::Local;
 use clap::{Args, Parser, Subcommand};
 use serde::Deserialize;
@@ -78,6 +80,12 @@ struct RemoteRegistry {
 struct RegistryFile {
     version: u8,
     skills: BTreeMap<String, SkillEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubContentResponse {
+    content: String,
+    encoding: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -462,15 +470,17 @@ fn find_project_registry() -> Result<Option<(PathBuf, RegistryFile)>> {
 }
 
 fn load_remote_registry(remote: &RemoteRegistry) -> Result<RegistryFile> {
-    let url = remote_raw_url(remote, "registry.yaml");
-    let body = fetch_text(&url)?;
+    let body = fetch_github_content(remote, "registry.yaml").or_else(|_| {
+        let url = remote_raw_url(remote, "registry.yaml");
+        fetch_text(&url)
+    })?;
     let registry = serde_yaml::from_str::<RegistryFile>(&body)
-        .with_context(|| format!("failed to parse registry {}", url))?;
+        .with_context(|| format!("failed to parse registry {}", remote_registry_label(remote)))?;
     if registry.version != 1 {
         bail!(
             "unsupported registry version {} from {}",
             registry.version,
-            url
+            remote_registry_label(remote)
         );
     }
     Ok(registry)
@@ -606,7 +616,10 @@ fn read_yaml<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
 }
 
 fn fetch_text(url: &str) -> Result<String> {
-    let response = reqwest::blocking::get(url).with_context(|| format!("failed to GET {}", url))?;
+    let response = http_client()
+        .get(url)
+        .send()
+        .with_context(|| format!("failed to GET {}", url))?;
     if !response.status().is_success() {
         bail!("GET {} returned {}", url, response.status());
     }
@@ -616,8 +629,10 @@ fn fetch_text(url: &str) -> Result<String> {
 }
 
 fn fetch_bytes(url: &str) -> Result<Vec<u8>> {
-    let mut response =
-        reqwest::blocking::get(url).with_context(|| format!("failed to GET {}", url))?;
+    let mut response = http_client()
+        .get(url)
+        .send()
+        .with_context(|| format!("failed to GET {}", url))?;
     if !response.status().is_success() {
         bail!("GET {} returned {}", url, response.status());
     }
@@ -626,6 +641,37 @@ fn fetch_bytes(url: &str) -> Result<Vec<u8>> {
         .read_to_end(&mut bytes)
         .with_context(|| format!("failed to read response from {}", url))?;
     Ok(bytes)
+}
+
+fn fetch_github_content(registry: &RemoteRegistry, path: &str) -> Result<String> {
+    let url = github_contents_url(registry, path);
+    let response = http_client()
+        .get(&url)
+        .send()
+        .with_context(|| format!("failed to GET {}", url))?;
+    if !response.status().is_success() {
+        bail!("GET {} returned {}", url, response.status());
+    }
+    let body = response
+        .text()
+        .with_context(|| format!("failed to read response from {}", url))?;
+    let content = serde_json::from_str::<GitHubContentResponse>(&body)
+        .with_context(|| format!("failed to parse GitHub content response from {}", url))?;
+    if content.encoding != "base64" {
+        bail!("unsupported GitHub content encoding '{}'", content.encoding);
+    }
+    let compact = content.content.replace(['\n', '\r'], "");
+    let decoded = BASE64
+        .decode(compact)
+        .with_context(|| format!("failed to decode GitHub content from {}", url))?;
+    String::from_utf8(decoded).with_context(|| format!("GitHub content is not UTF-8: {}", url))
+}
+
+fn http_client() -> reqwest::blocking::Client {
+    reqwest::blocking::Client::builder()
+        .user_agent("skillbox")
+        .build()
+        .expect("build HTTP client")
 }
 
 fn remote_raw_url(registry: &RemoteRegistry, path: &str) -> String {
@@ -640,6 +686,21 @@ fn remote_raw_url(registry: &RemoteRegistry, path: &str) -> String {
         registry.repo,
         reference,
         path.trim_start_matches('/')
+    )
+}
+
+fn github_contents_url(registry: &RemoteRegistry, path: &str) -> String {
+    let owner = registry.owner.as_deref().unwrap_or(DEFAULT_REGISTRY_OWNER);
+    let reference = registry
+        .reference
+        .as_deref()
+        .unwrap_or(DEFAULT_REGISTRY_REF);
+    format!(
+        "https://api.github.com/repos/{}/{}/contents/{}?ref={}",
+        owner,
+        registry.repo,
+        path.trim_start_matches('/'),
+        reference
     )
 }
 
