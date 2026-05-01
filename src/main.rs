@@ -33,6 +33,8 @@ enum Command {
     Fetch(FetchArgs),
     /// Remove Skillbox-created temp folders.
     Cleanup,
+    /// Check Skillbox configuration, registries, and paths.
+    Doctor,
 }
 
 #[derive(Args)]
@@ -42,6 +44,9 @@ struct ListArgs {
     /// Limit output to a category.
     #[arg(long, value_parser = parse_category)]
     category: Option<String>,
+    /// Print only skill names.
+    #[arg(long)]
+    names: bool,
 }
 
 #[derive(Args)]
@@ -80,6 +85,8 @@ struct SkillEntry {
     category: String,
     description: String,
     path: String,
+    #[serde(default)]
+    aliases: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -107,10 +114,12 @@ fn run() -> Result<()> {
     match cli.command.unwrap_or(Command::List(ListArgs {
         query: Vec::new(),
         category: None,
+        names: false,
     })) {
         Command::List(args) => list(args),
         Command::Fetch(args) => fetch(args),
         Command::Cleanup => cleanup(),
+        Command::Doctor => doctor(),
     }
 }
 
@@ -146,8 +155,19 @@ fn list(args: ListArgs) -> Result<()> {
         matches.truncate(MAX_SEARCH_RESULTS);
     }
 
-    for (_, skill) in matches {
-        println!("{}", format_list_line(&skill, filtered_by_category));
+    if args.names {
+        println!(
+            "{}",
+            matches
+                .iter()
+                .map(|(_, skill)| skill.name.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+    } else {
+        for (_, skill) in matches {
+            println!("{}", format_list_line(&skill, filtered_by_category));
+        }
     }
     Ok(())
 }
@@ -174,6 +194,11 @@ fn search_score(skill: &ResolvedSkill, raw_query: &str, query_tokens: &[String])
         skill.entry.category.to_lowercase(),
         skill.entry.description.to_lowercase()
     );
+    let haystack = format!(
+        "{} {}",
+        haystack,
+        skill.entry.aliases.join(" ").to_lowercase()
+    );
     let haystack_tokens = query_tokens_from_text(&haystack);
     let normalized_query = raw_query.to_lowercase();
     let mut score = 0;
@@ -198,6 +223,13 @@ fn search_score(skill: &ResolvedSkill, raw_query: &str, query_tokens: &[String])
         }
         if skill.entry.category == *token {
             score += 8;
+        }
+        if skill.entry.aliases.iter().any(|alias| {
+            query_tokens_from_text(alias)
+                .iter()
+                .any(|candidate| candidate == token)
+        }) {
+            score += 10;
         }
         if haystack_tokens.iter().any(|candidate| candidate == token) {
             score += 4;
@@ -280,6 +312,45 @@ fn cleanup() -> Result<()> {
     Ok(())
 }
 
+fn doctor() -> Result<()> {
+    println!("skillbox: {}", env!("CARGO_PKG_VERSION"));
+    println!("binary: {}", current_exe_display());
+    if let Some(path) = config_path() {
+        println!(
+            "config: {}{}",
+            path.display(),
+            if path.exists() {
+                ""
+            } else {
+                " (missing, using default)"
+            }
+        );
+    }
+    println!("temp: {}", temp_root().display());
+
+    match find_project_registry()? {
+        Some((root, registry)) => {
+            println!(
+                "project: {} ({} skills)",
+                root.display(),
+                registry.skills.len()
+            );
+        }
+        None => println!("project: none"),
+    }
+
+    for remote in configured_registries()? {
+        let label = remote_registry_label(&remote);
+        match load_remote_registry(&remote) {
+            Ok(registry) => println!("remote: {} ok ({} skills)", label, registry.skills.len()),
+            Err(error) => println!("remote: {} error ({:#})", label, error),
+        }
+    }
+
+    println!("skills: {}", load_skills()?.len());
+    Ok(())
+}
+
 fn parse_category(value: &str) -> std::result::Result<String, String> {
     if ALLOWED_CATEGORIES.contains(&value) {
         Ok(value.to_string())
@@ -339,6 +410,11 @@ fn validate_entry(name: &str, entry: &SkillEntry) -> Result<()> {
     }
     if entry.path.trim().is_empty() {
         bail!("skill '{}' has an empty path", name);
+    }
+    for alias in &entry.aliases {
+        if alias.trim().is_empty() {
+            bail!("skill '{}' has an empty alias", name);
+        }
     }
     Ok(())
 }
@@ -579,6 +655,21 @@ fn archive_url(registry: &RemoteRegistry) -> String {
     )
 }
 
+fn remote_registry_label(registry: &RemoteRegistry) -> String {
+    let owner = registry.owner.as_deref().unwrap_or(DEFAULT_REGISTRY_OWNER);
+    let reference = registry
+        .reference
+        .as_deref()
+        .unwrap_or(DEFAULT_REGISTRY_REF);
+    format!("{}/{}/{}", owner, registry.repo, reference)
+}
+
+fn current_exe_display() -> String {
+    std::env::current_exe()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|_| "unknown".to_string())
+}
+
 fn temp_root() -> PathBuf {
     std::env::temp_dir().join("skillbox")
 }
@@ -638,6 +729,7 @@ mod tests {
                 category: "frontend".to_string(),
                 description: "Build and polish frontend UI".to_string(),
                 path: "skills/frontend".to_string(),
+                aliases: Vec::new(),
             },
             source: Source::Remote {
                 registry: default_remote_registry(),
@@ -663,6 +755,7 @@ mod tests {
                 description: "Optimize React and Next.js; use for rendering and performance."
                     .to_string(),
                 path: "skills/vercel-react-best-practices".to_string(),
+                aliases: vec!["guidelines".to_string()],
             },
             source: Source::Remote {
                 registry: default_remote_registry(),
@@ -676,6 +769,25 @@ mod tests {
     }
 
     #[test]
+    fn natural_language_search_scores_registry_aliases() {
+        let skill = ResolvedSkill {
+            name: "react".to_string(),
+            entry: SkillEntry {
+                category: "frontend".to_string(),
+                description: "Work with React".to_string(),
+                path: "skills/react".to_string(),
+                aliases: vec!["nextjs".to_string(), "hooks".to_string()],
+            },
+            source: Source::Remote {
+                registry: default_remote_registry(),
+            },
+        };
+
+        let tokens = query_tokens("nextjs hooks");
+        assert!(search_score(&skill, "nextjs hooks", &tokens) > 0);
+    }
+
+    #[test]
     fn short_tokens_do_not_match_inside_unrelated_words() {
         let skill = ResolvedSkill {
             name: "client-comms-studio".to_string(),
@@ -683,6 +795,7 @@ mod tests {
                 category: "project".to_string(),
                 description: "Draft client communications".to_string(),
                 path: "skills/client-comms-studio".to_string(),
+                aliases: Vec::new(),
             },
             source: Source::Remote {
                 registry: default_remote_registry(),
