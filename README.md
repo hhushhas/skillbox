@@ -78,6 +78,59 @@ skills:
     aliases: [react, nextjs, hooks, components]
 ```
 
+## Adding Skills
+
+Reusable skills live in the public registry:
+
+```text
+hhushhas/skillbox-registry
+```
+
+Project skills live with the project:
+
+```text
+repo/.agents/skillbox.yaml
+repo/.agents/skills.available/<skill-name>/SKILL.md
+```
+
+To add a reusable skill:
+
+1. Add `skills/<skill-name>/SKILL.md` to the registry repo.
+2. Keep optional support files inside the same skill folder, such as `references/`, `scripts/`, `assets/`, or `agents/`.
+3. Add the skill to `registry.yaml`.
+4. Pick one category from the fixed list below.
+5. Write a canonical one-line description.
+6. Add aliases for natural-language search.
+7. Run `skillbox doctor`, `skillbox list "<query>"`, and `skillbox fetch <skill-name> --print` or `--to-temp`.
+
+## Canonical Descriptions
+
+`registry.yaml` descriptions are the model-facing discovery text. Keep them consistent:
+
+```text
+- one line only
+- 70-150 characters preferred
+- start with a practical capability, not marketing language
+- include the main trigger or use case
+- name important scope only when it changes routing
+- avoid hype such as "comprehensive", "ultimate", or "powerful"
+- avoid implementation history, repo paths, and install notes
+```
+
+Preferred shape:
+
+```text
+<capability/action> for <domain/task>; use when <trigger or situation>.
+```
+
+Examples:
+
+```text
+Build and polish frontend UI; use for layouts, components, accessibility, and visual QA.
+Work with shadcn/ui; use for component installs, registry usage, styling, and composition.
+Run browser automation; use for web flows, local app QA, screenshots, and form interaction.
+```
+
 ## Categories
 
 ```text
