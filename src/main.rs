@@ -113,6 +113,7 @@ fn run() -> Result<()> {
 
 fn list(args: ListArgs) -> Result<()> {
     let skills = load_skills()?;
+    let filtered_by_category = args.category.is_some();
     for skill in skills {
         if args
             .category
@@ -121,12 +122,20 @@ fn list(args: ListArgs) -> Result<()> {
         {
             continue;
         }
-        println!(
-            "{:<34} {:<8} {}",
-            skill.name, skill.entry.category, skill.entry.description
-        );
+        println!("{}", format_list_line(&skill, filtered_by_category));
     }
     Ok(())
+}
+
+fn format_list_line(skill: &ResolvedSkill, filtered_by_category: bool) -> String {
+    if filtered_by_category {
+        format!("{}: {}", skill.name, skill.entry.description)
+    } else {
+        format!(
+            "{} [{}]: {}",
+            skill.name, skill.entry.category, skill.entry.description
+        )
+    }
 }
 
 fn fetch(args: FetchArgs) -> Result<()> {
@@ -509,5 +518,29 @@ mod tests {
             "frontend"
         );
         assert!(parse_category("sales").is_err());
+    }
+
+    #[test]
+    fn list_line_omits_category_when_category_filter_is_active() {
+        let skill = ResolvedSkill {
+            name: "frontend".to_string(),
+            entry: SkillEntry {
+                category: "frontend".to_string(),
+                description: "Build and polish frontend UI".to_string(),
+                path: "skills/frontend".to_string(),
+            },
+            source: Source::Remote {
+                registry: default_remote_registry(),
+            },
+        };
+
+        assert_eq!(
+            format_list_line(&skill, true),
+            "frontend: Build and polish frontend UI"
+        );
+        assert_eq!(
+            format_list_line(&skill, false),
+            "frontend [frontend]: Build and polish frontend UI"
+        );
     }
 }
