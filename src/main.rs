@@ -11,6 +11,7 @@ use serde::Deserialize;
 const DEFAULT_REGISTRY_OWNER: &str = "hhushhas";
 const DEFAULT_REGISTRY_REPO: &str = "skillbox-registry";
 const DEFAULT_REGISTRY_REF: &str = "main";
+const MAX_SEARCH_RESULTS: usize = 8;
 const ALLOWED_CATEGORIES: [&str; 7] = [
     "frontend", "backend", "ai", "cloud", "design", "browser", "project",
 ];
@@ -36,6 +37,8 @@ enum Command {
 
 #[derive(Args)]
 struct ListArgs {
+    /// Optional natural-language search query.
+    query: Vec<String>,
     /// Limit output to a category.
     #[arg(long, value_parser = parse_category)]
     category: Option<String>,
@@ -101,10 +104,10 @@ fn main() {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
-    match cli
-        .command
-        .unwrap_or(Command::List(ListArgs { category: None }))
-    {
+    match cli.command.unwrap_or(Command::List(ListArgs {
+        query: Vec::new(),
+        category: None,
+    })) {
         Command::List(args) => list(args),
         Command::Fetch(args) => fetch(args),
         Command::Cleanup => cleanup(),
@@ -114,17 +117,43 @@ fn run() -> Result<()> {
 fn list(args: ListArgs) -> Result<()> {
     let skills = load_skills()?;
     let filtered_by_category = args.category.is_some();
-    for skill in skills {
-        if args
-            .category
-            .as_deref()
-            .is_some_and(|category| category != skill.entry.category)
-        {
+
+    let mut matches = Vec::new();
+    let query = args.query.join(" ");
+    let query_tokens = query_tokens(&query);
+
+    for skill in skills
+        .into_iter()
+        .filter(|skill| category_matches(skill, args.category.as_deref()))
+    {
+        if query_tokens.is_empty() {
+            matches.push((0, skill));
             continue;
         }
+
+        let score = search_score(&skill, &query, &query_tokens);
+        if score > 0 {
+            matches.push((score, skill));
+        }
+    }
+
+    if !query_tokens.is_empty() {
+        matches.sort_by(|(left_score, left_skill), (right_score, right_skill)| {
+            right_score
+                .cmp(left_score)
+                .then_with(|| left_skill.name.cmp(&right_skill.name))
+        });
+        matches.truncate(MAX_SEARCH_RESULTS);
+    }
+
+    for (_, skill) in matches {
         println!("{}", format_list_line(&skill, filtered_by_category));
     }
     Ok(())
+}
+
+fn category_matches(skill: &ResolvedSkill, category: Option<&str>) -> bool {
+    category.is_none_or(|category| category == skill.entry.category)
 }
 
 fn format_list_line(skill: &ResolvedSkill, filtered_by_category: bool) -> String {
@@ -135,6 +164,87 @@ fn format_list_line(skill: &ResolvedSkill, filtered_by_category: bool) -> String
             "{} [{}]: {}",
             skill.name, skill.entry.category, skill.entry.description
         )
+    }
+}
+
+fn search_score(skill: &ResolvedSkill, raw_query: &str, query_tokens: &[String]) -> u16 {
+    let haystack = format!(
+        "{} {} {}",
+        skill.name.to_lowercase(),
+        skill.entry.category.to_lowercase(),
+        skill.entry.description.to_lowercase()
+    );
+    let haystack_tokens = query_tokens_from_text(&haystack);
+    let normalized_query = raw_query.to_lowercase();
+    let mut score = 0;
+
+    if !normalized_query.trim().is_empty() && haystack.contains(normalized_query.trim()) {
+        score += 12;
+    }
+
+    for token in query_tokens {
+        if token == "skills" || token == "skill" || token == "for" {
+            continue;
+        }
+        let name = skill.name.to_lowercase();
+        let name_tokens = query_tokens_from_text(&name);
+
+        if name == *token {
+            score += 18;
+        } else if name_tokens.iter().any(|candidate| candidate == token) {
+            score += 12;
+        } else if token.len() >= 3 && name.contains(token) {
+            score += 10;
+        }
+        if skill.entry.category == *token {
+            score += 8;
+        }
+        if haystack_tokens.iter().any(|candidate| candidate == token) {
+            score += 4;
+        } else if token.len() >= 3 && haystack.contains(token) {
+            score += 2;
+        }
+    }
+
+    score
+}
+
+fn query_tokens(query: &str) -> Vec<String> {
+    let mut tokens = query_tokens_from_text(query);
+    let mut expanded = Vec::new();
+    for token in &tokens {
+        expanded.extend(token_synonyms(token).into_iter().map(str::to_string));
+    }
+    tokens.extend(expanded);
+    tokens.sort();
+    tokens.dedup();
+    tokens
+}
+
+fn query_tokens_from_text(text: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() {
+            current.push(ch.to_ascii_lowercase());
+        } else if !current.is_empty() {
+            tokens.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
+fn token_synonyms(token: &str) -> Vec<&'static str> {
+    match token {
+        "chatbot" | "chatbots" => vec!["chat", "ai", "agent"],
+        "guideline" | "guidelines" => vec!["practice", "practices", "rules"],
+        "transcription" | "transcripts" => vec!["transcript"],
+        "ui" => vec!["frontend", "design"],
+        "ux" => vec!["design"],
+        _ => Vec::new(),
     }
 }
 
@@ -542,5 +652,53 @@ mod tests {
             format_list_line(&skill, false),
             "frontend [frontend]: Build and polish frontend UI"
         );
+    }
+
+    #[test]
+    fn natural_language_search_scores_synonyms() {
+        let skill = ResolvedSkill {
+            name: "vercel-react-best-practices".to_string(),
+            entry: SkillEntry {
+                category: "frontend".to_string(),
+                description: "Optimize React and Next.js; use for rendering and performance."
+                    .to_string(),
+                path: "skills/vercel-react-best-practices".to_string(),
+            },
+            source: Source::Remote {
+                registry: default_remote_registry(),
+            },
+        };
+
+        let tokens = query_tokens("react guidelines");
+        assert!(tokens.contains(&"react".to_string()));
+        assert!(tokens.contains(&"practices".to_string()));
+        assert!(search_score(&skill, "react guidelines", &tokens) > 0);
+    }
+
+    #[test]
+    fn short_tokens_do_not_match_inside_unrelated_words() {
+        let skill = ResolvedSkill {
+            name: "client-comms-studio".to_string(),
+            entry: SkillEntry {
+                category: "project".to_string(),
+                description: "Draft client communications".to_string(),
+                path: "skills/client-comms-studio".to_string(),
+            },
+            source: Source::Remote {
+                registry: default_remote_registry(),
+            },
+        };
+
+        let tokens = query_tokens("ai skills");
+        assert_eq!(search_score(&skill, "ai skills", &tokens), 0);
+    }
+
+    #[test]
+    fn query_tokenizer_normalizes_punctuation() {
+        assert_eq!(
+            query_tokens_from_text("design for chatbot"),
+            vec!["design", "for", "chatbot"]
+        );
+        assert!(query_tokens("chatbot").contains(&"chat".to_string()));
     }
 }

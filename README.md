@@ -7,6 +7,8 @@ Skillbox is a small, agent-agnostic CLI for listing and fetching trusted coding-
 ```bash
 skillbox list
 skillbox list --category frontend
+skillbox list "react guidelines"
+skillbox list "design for chatbot"
 skillbox fetch frontend --print
 skillbox fetch frontend --to-temp
 skillbox cleanup
