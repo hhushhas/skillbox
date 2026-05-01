@@ -31,6 +31,22 @@ cargo build --release
 cp target/release/skillbox ~/bin/skillbox
 ```
 
+## Download
+
+GitHub releases are at:
+
+```text
+https://github.com/hhushhas/skillbox/releases
+```
+
+macOS Apple Silicon v0.1.0:
+
+```bash
+curl -L https://github.com/hhushhas/skillbox/releases/download/v0.1.0/skillbox-v0.1.0-aarch64-apple-darwin.tar.gz -o skillbox.tar.gz
+tar -xzf skillbox.tar.gz
+install -m 0755 skillbox-aarch64-apple-darwin/skillbox ~/bin/skillbox
+```
+
 ## Registries
 
 Skillbox reads the nearest project registry first:
