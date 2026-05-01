@@ -103,6 +103,33 @@ To add a reusable skill:
 6. Add aliases for natural-language search.
 7. Run `skillbox doctor`, `skillbox list "<query>"`, and `skillbox fetch <skill-name> --print` or `--to-temp`.
 
+## Adding From skills.sh
+
+Treat a `skills.sh` URL as a discovery page, not as the canonical source.
+
+1. Open the `skills.sh` page and find the backing GitHub repo/path.
+2. Fetch the raw GitHub `SKILL.md`.
+3. Copy `SKILL.md` and any sibling `references/`, `scripts/`, `assets/`, or `agents/` into `skills/<skill-name>/`.
+4. Add a normalized entry to `registry.yaml`.
+5. Verify with:
+
+```bash
+ruby -e 'require "yaml"; YAML.load_file("registry.yaml"); puts "ok"'
+skillbox list "<natural query>"
+skillbox fetch <skill-name> --print
+skillbox fetch <skill-name> --to-temp
+```
+
+Then publish:
+
+```bash
+git add registry.yaml skills/<skill-name>
+git commit -m "Add <skill-name> skill"
+git push
+```
+
+Do not scrape rendered `skills.sh` HTML as the skill artifact. Use the raw GitHub files, then normalize the registry description and aliases.
+
 ## Canonical Descriptions
 
 `registry.yaml` descriptions are the model-facing discovery text. Keep them consistent:
