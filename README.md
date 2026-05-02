@@ -10,6 +10,9 @@ skillbox list --category frontend
 skillbox list --names --category frontend
 skillbox list "react guidelines"
 skillbox list "design for chatbot"
+skillbox search effect
+skillbox search ai
+skillbox search --names tokens
 skillbox fetch frontend --print
 skillbox fetch frontend --to-temp
 skillbox cleanup
@@ -39,10 +42,10 @@ GitHub releases are at:
 https://github.com/hhushhas/skillbox/releases
 ```
 
-macOS Apple Silicon v0.1.2:
+macOS Apple Silicon v0.1.3:
 
 ```bash
-curl -L https://github.com/hhushhas/skillbox/releases/download/v0.1.2/skillbox-v0.1.2-aarch64-apple-darwin.tar.gz -o skillbox.tar.gz
+curl -L https://github.com/hhushhas/skillbox/releases/download/v0.1.3/skillbox-v0.1.3-aarch64-apple-darwin.tar.gz -o skillbox.tar.gz
 tar -xzf skillbox.tar.gz
 install -m 0755 skillbox-aarch64-apple-darwin/skillbox ~/bin/skillbox
 ```
@@ -113,7 +116,8 @@ To add a reusable skill:
 4. Pick one category from the fixed list below.
 5. Write a canonical one-line description.
 6. Add aliases for natural-language search.
-8. Run `skillbox doctor`, `skillbox list "<query>"`, and `skillbox fetch <skill-name> --print` or `--to-temp`.
+7. Add `resources` when the skill has support folders such as `references/`, `scripts/`, `assets/`, `agents/`, `templates/`, `tests/`, or `evals/`.
+8. Run `skillbox doctor`, `skillbox search "<query>"`, and `skillbox fetch <skill-name> --print` or `--to-temp`.
 
 ## Adding From skills.sh
 
@@ -129,6 +133,7 @@ Treat a `skills.sh` URL as a discovery page, not as the canonical source.
 ```bash
 ruby -e 'require "yaml"; YAML.load_file("registry.yaml"); puts "ok"'
 skillbox list "<natural query>"
+skillbox search "<natural query>"
 skillbox fetch <skill-name> --print
 skillbox fetch <skill-name> --to-temp
 ```

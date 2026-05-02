@@ -31,6 +31,8 @@ struct Cli {
 enum Command {
     /// List available skills.
     List(ListArgs),
+    /// Search skills with a natural-language query.
+    Search(ListArgs),
     /// Fetch a skill as markdown or a temporary folder.
     Fetch(FetchArgs),
     /// Remove Skillbox-created temp folders.
@@ -127,6 +129,7 @@ fn run() -> Result<()> {
         names: false,
     })) {
         Command::List(args) => list(args),
+        Command::Search(args) => list(args),
         Command::Fetch(args) => fetch(args),
         Command::Cleanup => cleanup(),
         Command::Doctor => doctor(),
