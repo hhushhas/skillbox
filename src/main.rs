@@ -95,6 +95,8 @@ struct SkillEntry {
     path: String,
     #[serde(default)]
     aliases: Vec<String>,
+    #[serde(default)]
+    resources: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -185,13 +187,22 @@ fn category_matches(skill: &ResolvedSkill, category: Option<&str>) -> bool {
 }
 
 fn format_list_line(skill: &ResolvedSkill, filtered_by_category: bool) -> String {
+    let resources = format_resource_hint(skill);
     if filtered_by_category {
-        format!("{}: {}", skill.name, skill.entry.description)
+        format!("{}{}: {}", skill.name, resources, skill.entry.description)
     } else {
         format!(
-            "{} [{}]: {}",
-            skill.name, skill.entry.category, skill.entry.description
+            "{}{} [{}]: {}",
+            skill.name, resources, skill.entry.category, skill.entry.description
         )
+    }
+}
+
+fn format_resource_hint(skill: &ResolvedSkill) -> String {
+    if skill.entry.resources.is_empty() {
+        String::new()
+    } else {
+        format!("[{}]", skill.entry.resources.join(","))
     }
 }
 
@@ -299,6 +310,14 @@ fn fetch(args: FetchArgs) -> Result<()> {
         .ok_or_else(|| anyhow!("unknown skill '{}'", args.name))?;
 
     if args.print {
+        if !skill.entry.resources.is_empty() {
+            eprintln!(
+                "note: {} has {}; use `skillbox fetch {} --to-temp` for the full skill folder.",
+                skill.name,
+                skill.entry.resources.join(","),
+                skill.name
+            );
+        }
         let markdown = read_skill_markdown(&skill)?;
         print!("{markdown}");
         return Ok(());
@@ -422,6 +441,11 @@ fn validate_entry(name: &str, entry: &SkillEntry) -> Result<()> {
     for alias in &entry.aliases {
         if alias.trim().is_empty() {
             bail!("skill '{}' has an empty alias", name);
+        }
+    }
+    for resource in &entry.resources {
+        if resource.trim().is_empty() {
+            bail!("skill '{}' has an empty resource marker", name);
         }
     }
     Ok(())
@@ -791,6 +815,7 @@ mod tests {
                 description: "Build and polish frontend UI".to_string(),
                 path: "skills/frontend".to_string(),
                 aliases: Vec::new(),
+                resources: Vec::new(),
             },
             source: Source::Remote {
                 registry: default_remote_registry(),
@@ -808,6 +833,28 @@ mod tests {
     }
 
     #[test]
+    fn list_line_mentions_resource_markers() {
+        let skill = ResolvedSkill {
+            name: "agent-browser".to_string(),
+            entry: SkillEntry {
+                category: "browser".to_string(),
+                description: "Run browser automation".to_string(),
+                path: "skills/agent-browser".to_string(),
+                aliases: Vec::new(),
+                resources: vec!["refs".to_string(), "scripts".to_string()],
+            },
+            source: Source::Remote {
+                registry: default_remote_registry(),
+            },
+        };
+
+        assert_eq!(
+            format_list_line(&skill, true),
+            "agent-browser[refs,scripts]: Run browser automation"
+        );
+    }
+
+    #[test]
     fn natural_language_search_scores_synonyms() {
         let skill = ResolvedSkill {
             name: "vercel-react-best-practices".to_string(),
@@ -817,6 +864,7 @@ mod tests {
                     .to_string(),
                 path: "skills/vercel-react-best-practices".to_string(),
                 aliases: vec!["guidelines".to_string()],
+                resources: vec!["rules".to_string()],
             },
             source: Source::Remote {
                 registry: default_remote_registry(),
@@ -838,6 +886,7 @@ mod tests {
                 description: "Work with React".to_string(),
                 path: "skills/react".to_string(),
                 aliases: vec!["nextjs".to_string(), "hooks".to_string()],
+                resources: Vec::new(),
             },
             source: Source::Remote {
                 registry: default_remote_registry(),
@@ -857,6 +906,7 @@ mod tests {
                 description: "Draft client communications".to_string(),
                 path: "skills/client-comms-studio".to_string(),
                 aliases: Vec::new(),
+                resources: Vec::new(),
             },
             source: Source::Remote {
                 registry: default_remote_registry(),

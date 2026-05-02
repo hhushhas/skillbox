@@ -39,10 +39,10 @@ GitHub releases are at:
 https://github.com/hhushhas/skillbox/releases
 ```
 
-macOS Apple Silicon v0.1.1:
+macOS Apple Silicon v0.1.2:
 
 ```bash
-curl -L https://github.com/hhushhas/skillbox/releases/download/v0.1.1/skillbox-v0.1.1-aarch64-apple-darwin.tar.gz -o skillbox.tar.gz
+curl -L https://github.com/hhushhas/skillbox/releases/download/v0.1.2/skillbox-v0.1.2-aarch64-apple-darwin.tar.gz -o skillbox.tar.gz
 tar -xzf skillbox.tar.gz
 install -m 0755 skillbox-aarch64-apple-darwin/skillbox ~/bin/skillbox
 ```
@@ -78,6 +78,18 @@ skills:
     aliases: [react, nextjs, hooks, components]
 ```
 
+Registry entries can also include resource markers. These appear in `skillbox list` so agents know when to prefer `--to-temp`:
+
+```yaml
+skills:
+  git-merge-report:
+    category: project
+    description: "Prepare merge reports; use for non-destructive branch comparison and conflict planning."
+    path: skills/git-merge-report
+    aliases: [git, merge, conflict, branch, diff, report]
+    resources: [refs, scripts]
+```
+
 ## Adding Skills
 
 Reusable skills live in the public registry:
@@ -101,7 +113,7 @@ To add a reusable skill:
 4. Pick one category from the fixed list below.
 5. Write a canonical one-line description.
 6. Add aliases for natural-language search.
-7. Run `skillbox doctor`, `skillbox list "<query>"`, and `skillbox fetch <skill-name> --print` or `--to-temp`.
+8. Run `skillbox doctor`, `skillbox list "<query>"`, and `skillbox fetch <skill-name> --print` or `--to-temp`.
 
 ## Adding From skills.sh
 
@@ -111,7 +123,8 @@ Treat a `skills.sh` URL as a discovery page, not as the canonical source.
 2. Fetch the raw GitHub `SKILL.md`.
 3. Copy `SKILL.md` and any sibling `references/`, `scripts/`, `assets/`, or `agents/` into `skills/<skill-name>/`.
 4. Add a normalized entry to `registry.yaml`.
-5. Verify with:
+5. Add `resources` when the skill has support folders such as `references/`, `scripts/`, `assets/`, `agents/`, `templates/`, `tests/`, or `evals/`.
+6. Verify with:
 
 ```bash
 ruby -e 'require "yaml"; YAML.load_file("registry.yaml"); puts "ok"'
