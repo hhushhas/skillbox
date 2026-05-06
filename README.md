@@ -25,7 +25,13 @@ skillbox doctor
 
 ## Install
 
-After the repository is public:
+Homebrew:
+
+```bash
+brew install hhushhas/tap/skillbox
+```
+
+Cargo:
 
 ```bash
 cargo install --git https://github.com/hhushhas/skillbox
