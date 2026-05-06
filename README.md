@@ -15,6 +15,7 @@ skillbox search ai
 skillbox search --names tokens
 skillbox fetch frontend --print
 skillbox fetch frontend --to-temp
+skillbox info frontend
 skillbox cleanup
 skillbox doctor
 ```
@@ -42,10 +43,10 @@ GitHub releases are at:
 https://github.com/hhushhas/skillbox/releases
 ```
 
-macOS Apple Silicon v0.1.3:
+macOS Apple Silicon v0.1.4:
 
 ```bash
-curl -L https://github.com/hhushhas/skillbox/releases/download/v0.1.3/skillbox-v0.1.3-aarch64-apple-darwin.tar.gz -o skillbox.tar.gz
+curl -L https://github.com/hhushhas/skillbox/releases/download/v0.1.4/skillbox-v0.1.4-aarch64-apple-darwin.tar.gz -o skillbox.tar.gz
 tar -xzf skillbox.tar.gz
 install -m 0755 skillbox-aarch64-apple-darwin/skillbox ~/bin/skillbox
 ```
@@ -118,6 +119,8 @@ To add a reusable skill:
 6. Add aliases for natural-language search.
 7. Add `resources` when the skill has support folders such as `references/`, `scripts/`, `assets/`, `agents/`, `templates/`, `tests/`, or `evals/`.
 8. Run `skillbox doctor`, `skillbox search "<query>"`, and `skillbox fetch <skill-name> --print` or `--to-temp`.
+
+To update an existing skill, run `skillbox info <skill-name>` to find whether it comes from the project registry or a remote registry, edit the shown registry entry and skill folder, then run the same verification commands.
 
 ## Adding From skills.sh
 

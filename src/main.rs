@@ -35,6 +35,8 @@ enum Command {
     Search(ListArgs),
     /// Fetch a skill as markdown or a temporary folder.
     Fetch(FetchArgs),
+    /// Show where a skill lives and how to update it.
+    Info(InfoArgs),
     /// Remove Skillbox-created temp folders.
     Cleanup,
     /// Check Skillbox configuration, registries, and paths.
@@ -63,6 +65,12 @@ struct FetchArgs {
     /// Copy or download the full skill folder to temp and print its path.
     #[arg(long)]
     to_temp: bool,
+}
+
+#[derive(Args)]
+struct InfoArgs {
+    /// Skill name from the registry.
+    name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -131,6 +139,7 @@ fn run() -> Result<()> {
         Command::List(args) => list(args),
         Command::Search(args) => list(args),
         Command::Fetch(args) => fetch(args),
+        Command::Info(args) => info(args),
         Command::Cleanup => cleanup(),
         Command::Doctor => doctor(),
     }
@@ -328,6 +337,44 @@ fn fetch(args: FetchArgs) -> Result<()> {
 
     let destination = copy_skill_to_temp(&skill)?;
     println!("{}", destination.display());
+    Ok(())
+}
+
+fn info(args: InfoArgs) -> Result<()> {
+    let skill = load_skills()?
+        .into_iter()
+        .find(|skill| skill.name == args.name)
+        .ok_or_else(|| anyhow!("unknown skill '{}'", args.name))?;
+
+    println!("name: {}", skill.name);
+    println!("category: {}", skill.entry.category);
+    println!("description: {}", skill.entry.description);
+    if !skill.entry.aliases.is_empty() {
+        println!("aliases: {}", skill.entry.aliases.join(","));
+    }
+    if !skill.entry.resources.is_empty() {
+        println!("resources: {}", skill.entry.resources.join(","));
+    }
+
+    match &skill.source {
+        Source::Project { root } => {
+            println!("source: project");
+            println!("registry: {}", root.join(".agents/skillbox.yaml").display());
+            println!("skill: {}", root.join(&skill.entry.path).display());
+            println!(
+                "update: edit the project registry and skill folder, then run doctor/search/fetch"
+            );
+        }
+        Source::Remote { registry } => {
+            println!("source: remote");
+            println!("registry: {}", remote_registry_label(registry));
+            println!("skill: {}", remote_tree_url(registry, &skill.entry.path));
+            println!(
+                "update: edit registry.yaml and the skill folder in the source repo, then run doctor/search/fetch"
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -709,6 +756,21 @@ fn remote_raw_url(registry: &RemoteRegistry, path: &str) -> String {
         .unwrap_or(DEFAULT_REGISTRY_REF);
     format!(
         "https://raw.githubusercontent.com/{}/{}/{}/{}",
+        owner,
+        registry.repo,
+        reference,
+        path.trim_start_matches('/')
+    )
+}
+
+fn remote_tree_url(registry: &RemoteRegistry, path: &str) -> String {
+    let owner = registry.owner.as_deref().unwrap_or(DEFAULT_REGISTRY_OWNER);
+    let reference = registry
+        .reference
+        .as_deref()
+        .unwrap_or(DEFAULT_REGISTRY_REF);
+    format!(
+        "https://github.com/{}/{}/tree/{}/{}",
         owner,
         registry.repo,
         reference,
