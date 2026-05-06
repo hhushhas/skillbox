@@ -16,6 +16,8 @@ skillbox search --names tokens
 skillbox fetch frontend --print
 skillbox fetch frontend --to-temp
 skillbox info frontend
+skillbox guide
+skillbox guide add-skill
 skillbox cleanup
 skillbox doctor
 ```
@@ -43,10 +45,10 @@ GitHub releases are at:
 https://github.com/hhushhas/skillbox/releases
 ```
 
-macOS Apple Silicon v0.1.6:
+macOS Apple Silicon v0.1.7:
 
 ```bash
-curl -L https://github.com/hhushhas/skillbox/releases/download/v0.1.6/skillbox-v0.1.6-aarch64-apple-darwin.tar.gz -o skillbox.tar.gz
+curl -L https://github.com/hhushhas/skillbox/releases/download/v0.1.7/skillbox-v0.1.7-aarch64-apple-darwin.tar.gz -o skillbox.tar.gz
 tar -xzf skillbox.tar.gz
 install -m 0755 skillbox-aarch64-apple-darwin/skillbox ~/bin/skillbox
 ```

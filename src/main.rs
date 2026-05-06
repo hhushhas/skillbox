@@ -15,6 +15,7 @@ const DEFAULT_REGISTRY_REPO: &str = "skillbox-registry";
 const DEFAULT_REGISTRY_REF: &str = "main";
 const MAX_SEARCH_RESULTS: usize = 8;
 const APPROX_CHARS_PER_TOKEN: usize = 4;
+const GUIDE_TOPICS: [&str; 4] = ["agent", "registry", "add-skill", "update-skill"];
 const ALLOWED_CATEGORIES: [&str; 7] = [
     "frontend", "backend", "ai", "cloud", "design", "browser", "project",
 ];
@@ -38,6 +39,8 @@ enum Command {
     Fetch(FetchArgs),
     /// Show where a skill lives and how to update it.
     Info(InfoArgs),
+    /// Print short setup and maintenance instructions.
+    Guide(GuideArgs),
     /// Remove Skillbox-created temp folders.
     Cleanup,
     /// Check Skillbox configuration, registries, and paths.
@@ -72,6 +75,13 @@ struct FetchArgs {
 struct InfoArgs {
     /// Skill name from the registry.
     name: String,
+}
+
+#[derive(Args)]
+struct GuideArgs {
+    /// Guide topic.
+    #[arg(value_parser = parse_guide_topic)]
+    topic: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -141,6 +151,7 @@ fn run() -> Result<()> {
         Command::Search(args) => list(args),
         Command::Fetch(args) => fetch(args),
         Command::Info(args) => info(args),
+        Command::Guide(args) => guide(args),
         Command::Cleanup => cleanup(),
         Command::Doctor => doctor(),
     }
@@ -390,6 +401,50 @@ fn info(args: InfoArgs) -> Result<()> {
     Ok(())
 }
 
+fn guide(args: GuideArgs) -> Result<()> {
+    match args.topic.as_deref() {
+        None => {
+            println!("topics: {}", GUIDE_TOPICS.join(" "));
+            println!("usage: skillbox guide <topic>");
+            println!("start: skillbox guide agent");
+        }
+        Some("agent") => {
+            println!("1. Find: skillbox search \"<task>\" or skillbox list --category <category>");
+            println!("2. Inspect: skillbox info <skill>");
+            println!("3. Load: skillbox fetch <skill> --print");
+            println!("4. Full folder: use --to-temp when resources are listed");
+        }
+        Some("registry") => {
+            println!("project registry: .agents/skillbox.yaml");
+            println!("project skills: .agents/skills.available/<skill>/SKILL.md");
+            println!("remote config: ~/.config/skillbox/config.yaml");
+            println!("default remote: hhushhas/skillbox-registry/main");
+        }
+        Some("add-skill") => {
+            println!("1. Add skills/<skill>/SKILL.md or .agents/skills.available/<skill>/SKILL.md");
+            println!(
+                "2. Add registry entry: category, description, path, aliases, optional resources"
+            );
+            println!("3. Keep description one line; say what it does and when to use it");
+            println!(
+                "4. Verify: skillbox doctor; skillbox search \"<query>\"; skillbox fetch <skill> --print"
+            );
+        }
+        Some("update-skill") => {
+            println!("1. Locate: skillbox info <skill>");
+            println!("2. Edit the shown registry entry and skill folder");
+            println!("3. Keep SKILL.md lean; move support material into resources");
+            println!("4. Verify token change with skillbox info <skill> and fetch output");
+        }
+        Some(topic) => bail!(
+            "unknown guide topic '{}'; expected one of: {}",
+            topic,
+            GUIDE_TOPICS.join(", ")
+        ),
+    }
+    Ok(())
+}
+
 fn approximate_tokens(text: &str) -> usize {
     text.chars().count().div_ceil(APPROX_CHARS_PER_TOKEN)
 }
@@ -452,6 +507,18 @@ fn parse_category(value: &str) -> std::result::Result<String, String> {
             "unknown category '{}'; expected one of: {}",
             value,
             ALLOWED_CATEGORIES.join(", ")
+        ))
+    }
+}
+
+fn parse_guide_topic(value: &str) -> std::result::Result<String, String> {
+    if GUIDE_TOPICS.contains(&value) {
+        Ok(value.to_string())
+    } else {
+        Err(format!(
+            "unknown topic '{}'; expected one of: {}",
+            value,
+            GUIDE_TOPICS.join(", ")
         ))
     }
 }
@@ -886,6 +953,15 @@ mod tests {
             "frontend"
         );
         assert!(parse_category("sales").is_err());
+    }
+
+    #[test]
+    fn guide_topic_parser_rejects_unknown_topics() {
+        assert_eq!(
+            parse_guide_topic("add-skill").expect("known topic"),
+            "add-skill"
+        );
+        assert!(parse_guide_topic("publish").is_err());
     }
 
     #[test]
