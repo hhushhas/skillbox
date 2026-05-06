@@ -15,7 +15,13 @@ const DEFAULT_REGISTRY_REPO: &str = "skillbox-registry";
 const DEFAULT_REGISTRY_REF: &str = "main";
 const MAX_SEARCH_RESULTS: usize = 8;
 const APPROX_CHARS_PER_TOKEN: usize = 4;
-const GUIDE_TOPICS: [&str; 4] = ["agent", "registry", "add-skill", "update-skill"];
+const GUIDE_TOPICS: [&str; 5] = [
+    "agent",
+    "onboarding",
+    "registry",
+    "add-skill",
+    "update-skill",
+];
 const ALLOWED_CATEGORIES: [&str; 7] = [
     "frontend", "backend", "ai", "cloud", "design", "browser", "project",
 ];
@@ -406,13 +412,22 @@ fn guide(args: GuideArgs) -> Result<()> {
         None => {
             println!("topics: {}", GUIDE_TOPICS.join(" "));
             println!("usage: skillbox guide <topic>");
-            println!("start: skillbox guide agent");
+            println!("start: skillbox guide onboarding");
         }
         Some("agent") => {
             println!("1. Find: skillbox search \"<task>\" or skillbox list --category <category>");
             println!("2. Inspect: skillbox info <skill>");
             println!("3. Load: skillbox fetch <skill> --print");
             println!("4. Full folder: use --to-temp when resources are listed");
+        }
+        Some("onboarding") => {
+            println!("1. Run: skillbox doctor");
+            println!("2. Explore: skillbox list; skillbox search \"<task>\"");
+            println!("3. Migrate useful global skills from ~/.agents/skills or ~/.codex/skills");
+            println!(
+                "4. Add shared skills to a registry; add project skills to .agents/skillbox.yaml"
+            );
+            println!("5. Load only when useful: skillbox fetch <skill> --print or --to-temp");
         }
         Some("registry") => {
             println!("project registry: .agents/skillbox.yaml");
