@@ -568,7 +568,8 @@ fn read_skill_markdown(skill: &ResolvedSkill) -> Result<String> {
         }
         Source::Remote { registry } => {
             let path = format!("{}/SKILL.md", skill.entry.path.trim_end_matches('/'));
-            fetch_text(&remote_raw_url(registry, &path))
+            fetch_github_content(registry, &path)
+                .or_else(|_| fetch_text(&remote_raw_url(registry, &path)))
         }
     }
 }
