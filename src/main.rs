@@ -14,6 +14,7 @@ const DEFAULT_REGISTRY_OWNER: &str = "hhushhas";
 const DEFAULT_REGISTRY_REPO: &str = "skillbox-registry";
 const DEFAULT_REGISTRY_REF: &str = "main";
 const MAX_SEARCH_RESULTS: usize = 8;
+const APPROX_CHARS_PER_TOKEN: usize = 4;
 const ALLOWED_CATEGORIES: [&str; 7] = [
     "frontend", "backend", "ai", "cloud", "design", "browser", "project",
 ];
@@ -331,6 +332,11 @@ fn fetch(args: FetchArgs) -> Result<()> {
             );
         }
         let markdown = read_skill_markdown(&skill)?;
+        eprintln!(
+            "tokens: ~{} ({} chars)",
+            approximate_tokens(&markdown),
+            markdown.chars().count()
+        );
         print!("{markdown}");
         return Ok(());
     }
@@ -355,6 +361,12 @@ fn info(args: InfoArgs) -> Result<()> {
     if !skill.entry.resources.is_empty() {
         println!("resources: {}", skill.entry.resources.join(","));
     }
+    let markdown = read_skill_markdown(&skill)?;
+    println!(
+        "tokens: ~{} ({} chars, SKILL.md)",
+        approximate_tokens(&markdown),
+        markdown.chars().count()
+    );
 
     match &skill.source {
         Source::Project { root } => {
@@ -376,6 +388,10 @@ fn info(args: InfoArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn approximate_tokens(text: &str) -> usize {
+    text.chars().count().div_ceil(APPROX_CHARS_PER_TOKEN)
 }
 
 fn cleanup() -> Result<()> {
@@ -990,5 +1006,12 @@ mod tests {
             vec!["design", "for", "chatbot"]
         );
         assert!(query_tokens("chatbot").contains(&"chat".to_string()));
+    }
+
+    #[test]
+    fn approximate_tokens_rounds_up_by_four_chars() {
+        assert_eq!(approximate_tokens(""), 0);
+        assert_eq!(approximate_tokens("abcd"), 1);
+        assert_eq!(approximate_tokens("abcde"), 2);
     }
 }
