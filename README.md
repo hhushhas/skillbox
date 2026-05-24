@@ -80,6 +80,8 @@ If no config exists, Skillbox defaults to:
 hhushhas/skillbox-registry
 ```
 
+For reusable skills, work in a local checkout of the registry repo rather than adding one-off local config.
+
 Registry entries can include aliases to improve natural-language search:
 
 ```yaml

@@ -430,19 +430,21 @@ fn guide(args: GuideArgs) -> Result<()> {
             println!("5. Load only when useful: skillbox fetch <skill> --print or --to-temp");
         }
         Some("registry") => {
+            println!("shared registry: local checkout of the registry repo");
             println!("project registry: .agents/skillbox.yaml");
             println!("project skills: .agents/skills.available/<skill>/SKILL.md");
             println!("remote config: ~/.config/skillbox/config.yaml");
             println!("default remote: hhushhas/skillbox-registry/main");
         }
         Some("add-skill") => {
-            println!("1. Add skills/<skill>/SKILL.md or .agents/skills.available/<skill>/SKILL.md");
+            println!("1. For reusable skills, edit a local checkout of the registry repo");
+            println!("2. Add skills/<skill>/SKILL.md or .agents/skills.available/<skill>/SKILL.md");
             println!(
-                "2. Add registry entry: category, description, path, aliases, optional resources"
+                "3. Add registry entry: category, description, path, aliases, optional resources"
             );
-            println!("3. Keep description one line; say what it does and when to use it");
+            println!("4. Keep description one line; say what it does and when to use it");
             println!(
-                "4. Verify: skillbox doctor; skillbox search \"<query>\"; skillbox fetch <skill> --print"
+                "5. Verify: skillbox doctor; skillbox search \"<query>\"; skillbox fetch <skill> --print"
             );
         }
         Some("update-skill") => {
