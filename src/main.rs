@@ -8,7 +8,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use chrono::Local;
 use clap::{Args, Parser, Subcommand};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const DEFAULT_REGISTRY_OWNER: &str = "hhushhas";
 const DEFAULT_REGISTRY_REPO: &str = "skillbox-registry";
@@ -45,6 +45,10 @@ enum Command {
     Fetch(FetchArgs),
     /// Show where a skill lives and how to update it.
     Info(InfoArgs),
+    /// Add an external skills.sh skill to the local installed registry.
+    Add(AddArgs),
+    /// Remove a skill from the local installed registry.
+    Remove(RemoveArgs),
     /// Print short setup and maintenance instructions.
     Guide(GuideArgs),
     /// Remove Skillbox-created temp folders.
@@ -63,6 +67,9 @@ struct ListArgs {
     /// Print only skill names.
     #[arg(long)]
     names: bool,
+    /// Search the skills.sh public directory instead of registries.
+    #[arg(long)]
+    web: bool,
 }
 
 #[derive(Args)]
@@ -80,6 +87,18 @@ struct FetchArgs {
 #[derive(Args)]
 struct InfoArgs {
     /// Skill name from the registry.
+    name: String,
+}
+
+#[derive(Args)]
+struct AddArgs {
+    /// External skill reference: owner/repo/skillId.
+    reference: String,
+}
+
+#[derive(Args)]
+struct RemoveArgs {
+    /// Installed skill id to remove.
     name: String,
 }
 
@@ -115,6 +134,17 @@ struct GitHubContentResponse {
     encoding: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct WebSearchResponse {
+    skills: Vec<WebSearchSkill>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebSearchSkill {
+    id: String,
+    installs: u64,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct SkillEntry {
     category: String,
@@ -124,6 +154,20 @@ struct SkillEntry {
     aliases: Vec<String>,
     #[serde(default)]
     resources: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct InstalledSkillEntry {
+    source: String,
+    path: String,
+    description: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct InstalledFile {
+    version: u8,
+    #[serde(default)]
+    skills: BTreeMap<String, InstalledSkillEntry>,
 }
 
 #[derive(Debug, Clone)]
@@ -137,6 +181,22 @@ struct ResolvedSkill {
 enum Source {
     Project { root: PathBuf },
     Remote { registry: RemoteRegistry },
+    Installed { source: String, path: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExternalRef {
+    owner: String,
+    repo: String,
+    skill_id: String,
+}
+
+#[derive(Debug)]
+struct ExternalSkill {
+    reference: ExternalRef,
+    branch: String,
+    path: String,
+    markdown: String,
 }
 
 fn main() {
@@ -152,11 +212,14 @@ fn run() -> Result<()> {
         query: Vec::new(),
         category: None,
         names: false,
+        web: false,
     })) {
         Command::List(args) => list(args),
         Command::Search(args) => list(args),
         Command::Fetch(args) => fetch(args),
         Command::Info(args) => info(args),
+        Command::Add(args) => add(args),
+        Command::Remove(args) => remove(args),
         Command::Guide(args) => guide(args),
         Command::Cleanup => cleanup(),
         Command::Doctor => doctor(),
@@ -164,6 +227,10 @@ fn run() -> Result<()> {
 }
 
 fn list(args: ListArgs) -> Result<()> {
+    if args.web {
+        return list_web(args);
+    }
+
     let skills = load_skills()?;
     let filtered_by_category = args.category.is_some();
 
@@ -208,6 +275,42 @@ fn list(args: ListArgs) -> Result<()> {
         for (_, skill) in matches {
             println!("{}", format_list_line(&skill, filtered_by_category));
         }
+    }
+    Ok(())
+}
+
+fn list_web(args: ListArgs) -> Result<()> {
+    let query = args.query.join(" ");
+    let url = format!("https://skills.sh/api/search?q={}", percent_encode(&query));
+    let body = fetch_text(&url)?;
+    let response = serde_json::from_str::<WebSearchResponse>(&body)
+        .with_context(|| format!("failed to parse skills.sh response from {}", url))?;
+
+    eprintln!("note: web results are unvetted third-party content from skills.sh.");
+
+    let skills = response
+        .skills
+        .into_iter()
+        .take(MAX_SEARCH_RESULTS)
+        .collect::<Vec<_>>();
+
+    if args.names {
+        println!(
+            "{}",
+            skills
+                .iter()
+                .map(|skill| skill.id.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        return Ok(());
+    }
+
+    for skill in skills {
+        println!(
+            "{} [web, {} installs]: unverified; fetch with skillbox fetch {}",
+            skill.id, skill.installs, skill.id
+        );
     }
     Ok(())
 }
@@ -334,12 +437,17 @@ fn fetch(args: FetchArgs) -> Result<()> {
         bail!("choose one: --print or --to-temp");
     }
 
+    if let Some(reference) = parse_external_ref(&args.name)? {
+        return fetch_external(args, reference);
+    }
+
     let skill = load_skills()?
         .into_iter()
         .find(|skill| skill.name == args.name)
         .ok_or_else(|| anyhow!("unknown skill '{}'", args.name))?;
 
     if args.print {
+        warn_unverified_if_external(&skill);
         if !skill.entry.resources.is_empty() {
             eprintln!(
                 "note: {} has {}; use `skillbox fetch {} --to-temp` for the full skill folder.",
@@ -358,12 +466,41 @@ fn fetch(args: FetchArgs) -> Result<()> {
         return Ok(());
     }
 
+    warn_unverified_if_external(&skill);
     let destination = copy_skill_to_temp(&skill)?;
     println!("{}", destination.display());
     Ok(())
 }
 
+fn fetch_external(args: FetchArgs, reference: ExternalRef) -> Result<()> {
+    let skill = resolve_external_skill(&reference)?;
+    eprintln!("warning: external skill from skills.sh — unverified third-party content");
+
+    if args.print {
+        eprintln!(
+            "tokens: ~{} ({} chars)",
+            approximate_tokens(&skill.markdown),
+            skill.markdown.chars().count()
+        );
+        print!("{}", skill.markdown);
+        return Ok(());
+    }
+
+    let destination = temp_root().join(format!(
+        "{}-{}",
+        sanitize_name(&skill.reference.skill_id),
+        Local::now().format("%Y%m%d%H%M%S")
+    ));
+    copy_external_skill_to_temp(&skill.reference, &skill.branch, &skill.path, &destination)?;
+    println!("{}", destination.display());
+    Ok(())
+}
+
 fn info(args: InfoArgs) -> Result<()> {
+    if let Some(reference) = parse_external_ref(&args.name)? {
+        return info_external(reference);
+    }
+
     let skill = load_skills()?
         .into_iter()
         .find(|skill| skill.name == args.name)
@@ -402,8 +539,77 @@ fn info(args: InfoArgs) -> Result<()> {
                 "update: edit registry.yaml and the skill folder in the source repo, then run doctor/search/fetch"
             );
         }
+        Source::Installed { source, path } => {
+            println!("source: installed external");
+            println!("registry: {}", installed_path_display());
+            println!("skill: {}", installed_tree_url(source, path));
+            println!("note: unverified third-party content");
+            println!(
+                "update: run skillbox add {}/{} to refresh this installed entry",
+                source, skill.name
+            );
+        }
     }
 
+    Ok(())
+}
+
+fn info_external(reference: ExternalRef) -> Result<()> {
+    let skill = resolve_external_skill(&reference)?;
+    println!("name: {}", skill.reference.skill_id);
+    println!("category: external");
+    println!(
+        "description: {}",
+        description_from_markdown(&skill.markdown)
+    );
+    println!(
+        "tokens: ~{} ({} chars, SKILL.md)",
+        approximate_tokens(&skill.markdown),
+        skill.markdown.chars().count()
+    );
+    println!("source: external");
+    println!("skill: {}", external_tree_url(&skill));
+    println!("note: unverified third-party content");
+    Ok(())
+}
+
+fn add(args: AddArgs) -> Result<()> {
+    let reference = parse_external_ref(&args.reference)?
+        .ok_or_else(|| anyhow!("expected external skill reference owner/repo/skillId"))?;
+    let skill = resolve_external_skill(&reference)?;
+    let path = installed_path().ok_or_else(|| anyhow!("failed to locate config directory"))?;
+    let mut installed = read_installed_file_at(&path)?;
+    let existed = installed.skills.contains_key(&skill.reference.skill_id);
+
+    installed.skills.insert(
+        skill.reference.skill_id.clone(),
+        InstalledSkillEntry {
+            source: format!("{}/{}", skill.reference.owner, skill.reference.repo),
+            path: skill.path.clone(),
+            description: description_from_markdown(&skill.markdown),
+        },
+    );
+    write_installed_file_at(&path, &installed)?;
+
+    if existed {
+        println!("updated {} in {}", skill.reference.skill_id, path.display());
+    } else {
+        println!("added {} to {}", skill.reference.skill_id, path.display());
+    }
+    eprintln!("warning: installed skill is unverified third-party content");
+    Ok(())
+}
+
+fn remove(args: RemoveArgs) -> Result<()> {
+    let path = installed_path().ok_or_else(|| anyhow!("failed to locate config directory"))?;
+    let mut installed = read_installed_file_at(&path)?;
+
+    if installed.skills.remove(&args.name).is_none() {
+        bail!("installed skill '{}' was not found", args.name);
+    }
+
+    write_installed_file_at(&path, &installed)?;
+    println!("removed {} from {}", args.name, path.display());
     Ok(())
 }
 
@@ -419,6 +625,9 @@ fn guide(args: GuideArgs) -> Result<()> {
             println!("2. Inspect: skillbox info <skill>");
             println!("3. Load: skillbox fetch <skill> --print");
             println!("4. Full folder: use --to-temp when resources are listed");
+            println!(
+                "5. Optional web: skillbox search \"<task>\" --web; external results are unverified and can be fetched by full id"
+            );
         }
         Some("onboarding") => {
             println!("1. Run: skillbox doctor");
@@ -435,6 +644,9 @@ fn guide(args: GuideArgs) -> Result<()> {
             println!("project skills: .agents/skills.available/<skill>/SKILL.md");
             println!("remote config: ~/.config/skillbox/config.yaml");
             println!("default remote: hhushhas/skillbox-registry/main");
+            println!(
+                "external installs: skillbox add owner/repo/skillId records ~/.config/skillbox/installed.yaml; remove with skillbox remove <skillId>"
+            );
         }
         Some("add-skill") => {
             println!("1. For reusable skills, edit a local checkout of the registry repo");
@@ -504,6 +716,18 @@ fn doctor() -> Result<()> {
         None => println!("project: none"),
     }
 
+    match installed_path() {
+        Some(path) if path.exists() => {
+            let installed = read_installed_file_at(&path)?;
+            println!(
+                "installed: {} ({} skills)",
+                path.display(),
+                installed.skills.len()
+            );
+        }
+        _ => println!("installed: none"),
+    }
+
     for remote in configured_registries()? {
         let label = remote_registry_label(&remote);
         match load_remote_registry(&remote) {
@@ -517,11 +741,11 @@ fn doctor() -> Result<()> {
 }
 
 fn parse_category(value: &str) -> std::result::Result<String, String> {
-    if ALLOWED_CATEGORIES.contains(&value) {
+    if value == "external" || ALLOWED_CATEGORIES.contains(&value) {
         Ok(value.to_string())
     } else {
         Err(format!(
-            "unknown category '{}'; expected one of: {}",
+            "unknown category '{}'; expected one of: {}, external",
             value,
             ALLOWED_CATEGORIES.join(", ")
         ))
@@ -554,6 +778,28 @@ fn load_skills() -> Result<Vec<ResolvedSkill>> {
                     source: Source::Project { root: root.clone() },
                 },
             );
+        }
+    }
+
+    if let Some(path) = installed_path()
+        && path.exists()
+    {
+        let installed = read_installed_file_at(&path)?;
+        for (name, entry) in installed.skills {
+            merged.entry(name.clone()).or_insert(ResolvedSkill {
+                name,
+                entry: SkillEntry {
+                    category: "external".to_string(),
+                    description: entry.description.clone(),
+                    path: entry.path.clone(),
+                    aliases: Vec::new(),
+                    resources: Vec::new(),
+                },
+                source: Source::Installed {
+                    source: entry.source,
+                    path: entry.path,
+                },
+            });
         }
     }
 
@@ -625,8 +871,55 @@ fn default_remote_registry() -> RemoteRegistry {
     }
 }
 
+fn skillbox_config_dir() -> Option<PathBuf> {
+    dirs::config_dir().map(|dir| dir.join("skillbox"))
+}
+
 fn config_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|dir| dir.join("skillbox").join("config.yaml"))
+    skillbox_config_dir().map(|dir| dir.join("config.yaml"))
+}
+
+fn installed_path() -> Option<PathBuf> {
+    skillbox_config_dir().map(|dir| dir.join("installed.yaml"))
+}
+
+fn installed_path_display() -> String {
+    installed_path()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "~/.config/skillbox/installed.yaml".to_string())
+}
+
+fn read_installed_file_at(path: &Path) -> Result<InstalledFile> {
+    if !path.exists() {
+        return Ok(empty_installed_file());
+    }
+
+    let installed = read_yaml::<InstalledFile>(path)?;
+    if installed.version != 1 {
+        bail!(
+            "unsupported installed registry version {} from {}",
+            installed.version,
+            path.display()
+        );
+    }
+    Ok(installed)
+}
+
+fn write_installed_file_at(path: &Path, installed: &InstalledFile) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let text = serde_yaml::to_string(installed)
+        .with_context(|| format!("failed to serialize {}", path.display()))?;
+    fs::write(path, text).with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn empty_installed_file() -> InstalledFile {
+    InstalledFile {
+        version: 1,
+        skills: BTreeMap::new(),
+    }
 }
 
 fn find_project_registry() -> Result<Option<(PathBuf, RegistryFile)>> {
@@ -671,6 +964,7 @@ fn read_skill_markdown(skill: &ResolvedSkill) -> Result<String> {
             fetch_github_content(registry, &path)
                 .or_else(|_| fetch_text(&remote_raw_url(registry, &path)))
         }
+        Source::Installed { source, path } => read_installed_skill_markdown(source, path),
     }
 }
 
@@ -688,6 +982,9 @@ fn copy_skill_to_temp(skill: &ResolvedSkill) -> Result<PathBuf> {
         }
         Source::Remote { registry } => {
             copy_remote_skill(registry, &skill.entry.path, &destination)?;
+        }
+        Source::Installed { source, path } => {
+            copy_installed_skill(source, path, &destination)?;
         }
     }
 
@@ -745,6 +1042,240 @@ fn copy_remote_skill(
         );
     }
     Ok(())
+}
+
+fn parse_external_ref(value: &str) -> Result<Option<ExternalRef>> {
+    if !value.contains('/') {
+        return Ok(None);
+    }
+
+    let parts = value.split('/').collect::<Vec<_>>();
+    if parts.len() != 3 || parts.iter().any(|part| part.trim().is_empty()) {
+        bail!("external skill references must use owner/repo/skillId");
+    }
+
+    Ok(Some(ExternalRef {
+        owner: parts[0].to_string(),
+        repo: parts[1].to_string(),
+        skill_id: parts[2].to_string(),
+    }))
+}
+
+fn resolve_external_skill(reference: &ExternalRef) -> Result<ExternalSkill> {
+    let (branch, archive) = fetch_repo_archive(&reference.owner, &reference.repo)?;
+    let folders = skill_folders_in_archive(&archive)?;
+    let Some(path) = matching_skill_folder(&reference.skill_id, &folders) else {
+        let names = available_skill_folder_names(&folders);
+        bail!(
+            "skill '{}' was not found in {}/{}; available skills: {}",
+            reference.skill_id,
+            reference.owner,
+            reference.repo,
+            names.join(", ")
+        );
+    };
+    let markdown_path = format!("{}/SKILL.md", path.trim_end_matches('/'));
+    let markdown = read_archive_file(&archive, &markdown_path)?;
+
+    Ok(ExternalSkill {
+        reference: reference.clone(),
+        branch,
+        path,
+        markdown,
+    })
+}
+
+fn fetch_repo_archive(owner: &str, repo: &str) -> Result<(String, Vec<u8>)> {
+    let main_url = repo_archive_url(owner, repo, "main");
+    match fetch_bytes(&main_url) {
+        Ok(bytes) => Ok(("main".to_string(), bytes)),
+        Err(main_error) => {
+            let master_url = repo_archive_url(owner, repo, "master");
+            fetch_bytes(&master_url)
+                .map(|bytes| ("master".to_string(), bytes))
+                .with_context(|| {
+                    format!(
+                        "failed to download {} on main ({:#}) or master",
+                        repo_label(owner, repo),
+                        main_error
+                    )
+                })
+        }
+    }
+}
+
+fn copy_external_skill_to_temp(
+    reference: &ExternalRef,
+    branch: &str,
+    path: &str,
+    destination: &Path,
+) -> Result<()> {
+    let archive = fetch_bytes(&repo_archive_url(&reference.owner, &reference.repo, branch))?;
+    copy_skill_from_archive(&archive, path, destination)
+}
+
+fn copy_installed_skill(source: &str, path: &str, destination: &Path) -> Result<()> {
+    let (owner, repo) = parse_installed_source(source)?;
+    let (_, archive) = fetch_repo_archive(owner, repo)?;
+    copy_skill_from_archive(&archive, path, destination)
+}
+
+fn copy_skill_from_archive(archive: &[u8], skill_path: &str, destination: &Path) -> Result<()> {
+    let decoder = flate2::read::GzDecoder::new(archive);
+    let mut archive = tar::Archive::new(decoder);
+    let mut copied = false;
+    let trimmed = Path::new(skill_path.trim_matches('/'));
+
+    fs::create_dir_all(destination)
+        .with_context(|| format!("failed to create {}", destination.display()))?;
+
+    for entry in archive
+        .entries()
+        .context("failed to read repository archive")?
+    {
+        let mut entry = entry.context("failed to read archive entry")?;
+        let path = entry
+            .path()
+            .context("failed to read archive path")?
+            .into_owned();
+        let Some(relative) = path_without_archive_root(&path) else {
+            continue;
+        };
+        let Ok(inside_skill) = relative.strip_prefix(trimmed) else {
+            continue;
+        };
+        if inside_skill.as_os_str().is_empty() {
+            continue;
+        }
+
+        let output = destination.join(inside_skill);
+        if let Some(parent) = output.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        entry
+            .unpack(&output)
+            .with_context(|| format!("failed to unpack {}", output.display()))?;
+        copied = true;
+    }
+
+    if !copied {
+        bail!(
+            "skill folder '{}' was not found in remote archive",
+            skill_path
+        );
+    }
+    Ok(())
+}
+
+fn read_installed_skill_markdown(source: &str, path: &str) -> Result<String> {
+    let (owner, repo) = parse_installed_source(source)?;
+    let (_, archive) = fetch_repo_archive(owner, repo)?;
+    read_archive_file(
+        &archive,
+        &format!("{}/SKILL.md", path.trim_end_matches('/')),
+    )
+}
+
+fn read_archive_file(archive: &[u8], wanted: &str) -> Result<String> {
+    let decoder = flate2::read::GzDecoder::new(archive);
+    let mut archive = tar::Archive::new(decoder);
+    let wanted = Path::new(wanted.trim_matches('/'));
+
+    for entry in archive
+        .entries()
+        .context("failed to read repository archive")?
+    {
+        let mut entry = entry.context("failed to read archive entry")?;
+        let path = entry
+            .path()
+            .context("failed to read archive path")?
+            .into_owned();
+        let Some(relative) = path_without_archive_root(&path) else {
+            continue;
+        };
+        if relative != wanted {
+            continue;
+        }
+
+        let mut text = String::new();
+        entry
+            .read_to_string(&mut text)
+            .with_context(|| format!("failed to read {}", wanted.display()))?;
+        return Ok(text);
+    }
+
+    bail!("{} was not found in remote archive", wanted.display())
+}
+
+fn skill_folders_in_archive(archive: &[u8]) -> Result<Vec<String>> {
+    let decoder = flate2::read::GzDecoder::new(archive);
+    let mut archive = tar::Archive::new(decoder);
+    let mut folders = Vec::new();
+
+    for entry in archive
+        .entries()
+        .context("failed to read repository archive")?
+    {
+        let entry = entry.context("failed to read archive entry")?;
+        let path = entry
+            .path()
+            .context("failed to read archive path")?
+            .into_owned();
+        let Some(relative) = path_without_archive_root(&path) else {
+            continue;
+        };
+        if relative.file_name().is_some_and(|name| name == "SKILL.md")
+            && let Some(parent) = relative.parent()
+        {
+            folders.push(parent.to_string_lossy().to_string());
+        }
+    }
+
+    folders.sort();
+    folders.dedup();
+    Ok(folders)
+}
+
+fn path_without_archive_root(path: &Path) -> Option<PathBuf> {
+    let mut components = path.components();
+    components.next()?;
+    Some(components.as_path().to_path_buf())
+}
+
+fn matching_skill_folder(skill_id: &str, folders: &[String]) -> Option<String> {
+    folders
+        .iter()
+        .find(|folder| folder_name(folder).is_some_and(|name| name == skill_id))
+        .cloned()
+        .or_else(|| {
+            folders
+                .iter()
+                .find(|folder| {
+                    folder_name(folder)
+                        .is_some_and(|name| name.ends_with(skill_id) || skill_id.ends_with(name))
+                })
+                .cloned()
+        })
+}
+
+fn folder_name(path: &str) -> Option<&str> {
+    path.trim_matches('/').rsplit('/').next()
+}
+
+fn available_skill_folder_names(folders: &[String]) -> Vec<String> {
+    folders
+        .iter()
+        .filter_map(|folder| folder_name(folder).map(str::to_string))
+        .collect()
+}
+
+fn parse_installed_source(source: &str) -> Result<(&str, &str)> {
+    let parts = source.split('/').collect::<Vec<_>>();
+    if parts.len() != 2 || parts.iter().any(|part| part.trim().is_empty()) {
+        bail!("installed skill source '{}' must use owner/repo", source);
+    }
+    Ok((parts[0], parts[1]))
 }
 
 fn copy_dir(source: &Path, destination: &Path) -> Result<()> {
@@ -842,6 +1373,76 @@ fn fetch_github_content(registry: &RemoteRegistry, path: &str) -> Result<String>
     String::from_utf8(decoded).with_context(|| format!("GitHub content is not UTF-8: {}", url))
 }
 
+fn percent_encode(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
+fn description_from_markdown(markdown: &str) -> String {
+    if let Some(description) = frontmatter_description(markdown) {
+        return description;
+    }
+
+    let mut lines = markdown.lines().peekable();
+    if lines.peek().is_some_and(|line| line.trim() == "---") {
+        lines.next();
+        for line in lines.by_ref() {
+            if line.trim() == "---" {
+                break;
+            }
+        }
+    }
+
+    lines
+        .find_map(|line| {
+            let trimmed = line.trim().trim_start_matches('#').trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(one_line(trimmed))
+            }
+        })
+        .unwrap_or_else(|| "External skill".to_string())
+}
+
+fn frontmatter_description(markdown: &str) -> Option<String> {
+    let mut lines = markdown.lines();
+    if lines.next()?.trim() != "---" {
+        return None;
+    }
+
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed == "---" {
+            return None;
+        }
+        if let Some(value) = trimmed.strip_prefix("description:") {
+            let description = value.trim().trim_matches(['"', '\'']);
+            if !description.is_empty() {
+                return Some(one_line(description));
+            }
+        }
+    }
+    None
+}
+
+fn one_line(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn warn_unverified_if_external(skill: &ResolvedSkill) {
+    if matches!(skill.source, Source::Installed { .. }) {
+        eprintln!("warning: external skill from skills.sh — unverified third-party content");
+    }
+}
+
 fn http_client() -> reqwest::blocking::Client {
     reqwest::blocking::Client::builder()
         .user_agent("skillbox")
@@ -906,6 +1507,39 @@ fn archive_url(registry: &RemoteRegistry) -> String {
     )
 }
 
+fn repo_archive_url(owner: &str, repo: &str, reference: &str) -> String {
+    format!(
+        "https://github.com/{}/{}/archive/refs/heads/{}.tar.gz",
+        owner, repo, reference
+    )
+}
+
+fn repo_label(owner: &str, repo: &str) -> String {
+    format!("{owner}/{repo}")
+}
+
+fn external_tree_url(skill: &ExternalSkill) -> String {
+    format!(
+        "https://github.com/{}/{}/tree/{}/{}",
+        skill.reference.owner,
+        skill.reference.repo,
+        skill.branch,
+        skill.path.trim_start_matches('/')
+    )
+}
+
+fn installed_tree_url(source: &str, path: &str) -> String {
+    match parse_installed_source(source) {
+        Ok((owner, repo)) => format!(
+            "https://github.com/{}/{}/tree/main/{}",
+            owner,
+            repo,
+            path.trim_start_matches('/')
+        ),
+        Err(_) => format!("{}:{}", source, path),
+    }
+}
+
 fn remote_registry_label(registry: &RemoteRegistry) -> String {
     let owner = registry.owner.as_deref().unwrap_or(DEFAULT_REGISTRY_OWNER);
     let reference = registry
@@ -940,6 +1574,74 @@ fn sanitize_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_ref_parser_accepts_three_segments_only() {
+        assert_eq!(
+            parse_external_ref("owner/repo/skill-id").expect("parse external"),
+            Some(ExternalRef {
+                owner: "owner".to_string(),
+                repo: "repo".to_string(),
+                skill_id: "skill-id".to_string(),
+            })
+        );
+        assert_eq!(parse_external_ref("plain-skill").expect("local"), None);
+        assert!(parse_external_ref("owner/repo").is_err());
+        assert!(parse_external_ref("owner/repo/skill/extra").is_err());
+        assert!(parse_external_ref("owner//skill").is_err());
+    }
+
+    #[test]
+    fn skill_folder_matching_prefers_exact_then_suffix() {
+        let folders = vec![
+            "skills/react-best-practices".to_string(),
+            "skills/vercel-react-best-practices".to_string(),
+            "skills/database".to_string(),
+        ];
+
+        assert_eq!(
+            matching_skill_folder("vercel-react-best-practices", &folders),
+            Some("skills/vercel-react-best-practices".to_string())
+        );
+
+        let suffix_only = vec![
+            "skills/react-best-practices".to_string(),
+            "skills/database".to_string(),
+        ];
+        assert_eq!(
+            matching_skill_folder("vercel-react-best-practices", &suffix_only),
+            Some("skills/react-best-practices".to_string())
+        );
+        assert_eq!(matching_skill_folder("python", &suffix_only), None);
+    }
+
+    #[test]
+    fn installed_file_round_trips() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let path = root.path().join("installed.yaml");
+        let mut installed = empty_installed_file();
+        installed.skills.insert(
+            "vercel-react-best-practices".to_string(),
+            InstalledSkillEntry {
+                source: "vercel-labs/agent-skills".to_string(),
+                path: "skills/react-best-practices".to_string(),
+                description: "React best practices".to_string(),
+            },
+        );
+
+        write_installed_file_at(&path, &installed).expect("write installed");
+        let round_tripped = read_installed_file_at(&path).expect("read installed");
+
+        assert_eq!(round_tripped.version, 1);
+        assert_eq!(
+            round_tripped
+                .skills
+                .get("vercel-react-best-practices")
+                .expect("installed skill")
+                .path,
+            "skills/react-best-practices"
+        );
+    }
 
     #[test]
     fn copy_dir_places_skill_contents_at_destination_root() {

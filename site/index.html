@@ -5,6 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Skillbox — skills loaded only when you ask</title>
   <meta name="description" content="Skillbox keeps coding-agent skills out of the context until you ask for them. No frontmatter preloading, no accidental invocation — one CLI for every agent." />
+  <link rel="icon" type="image/svg+xml" href="logos/skillbox.svg" />
+  <meta property="og:title" content="Skillbox — skills loaded only when you ask" />
+  <meta property="og:description" content="No frontmatter preloading, no accidental invocation — one CLI for every agent." />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="https://skillbox.hasanshoaib.com/images/og-card.png" />
+  <meta name="twitter:card" content="summary_large_image" />
   <style>
     :root {
       --bg: #0a0a0a;
@@ -33,7 +39,8 @@
       padding: 20px 0;
       border-bottom: 1px solid var(--border);
     }
-    nav .logo { font-weight: 600; letter-spacing: -0.2px; }
+    nav .logo { display: flex; align-items: center; gap: 9px; font-weight: 600; letter-spacing: -0.2px; }
+    nav .logo img { width: 18px; height: 18px; display: block; }
     nav .links { display: flex; gap: 20px; font-size: 14px; }
     nav .links a { color: var(--muted); }
     nav .links a:hover { color: var(--fg); }
@@ -44,6 +51,10 @@
       letter-spacing: -1.2px; margin: 0 0 16px;
     }
     .tagline { color: var(--muted); font-size: 16px; max-width: 480px; margin: 0 0 32px; }
+    .hero-img {
+      display: block; width: 100%; height: auto; margin-top: 56px;
+      border: 1px solid var(--border); border-radius: 8px;
+    }
     .cta { display: flex; gap: 12px; }
     .btn {
       display: inline-flex; align-items: center;
@@ -97,7 +108,7 @@
 <body>
   <div class="wrap">
     <nav>
-      <span class="logo">Skillbox</span>
+      <span class="logo"><img src="logos/skillbox.svg" alt="" /> Skillbox</span>
       <div class="links">
         <a href="#install">Install</a>
         <a href="https://github.com/hhushhas/skillbox" rel="noopener">GitHub</a>
@@ -111,6 +122,7 @@
         <a class="btn primary" href="#install">Install</a>
         <a class="btn ghost" href="https://github.com/hhushhas/skillbox" rel="noopener">GitHub</a>
       </div>
+      <img class="hero-img" src="images/hero-box-dark.png" alt="Line-art illustration of an open box with one document being lifted out while others wait outside" width="1120" height="747" />
     </header>
 
     <section>
@@ -161,13 +173,30 @@
     </section>
 
     <section>
+      <p class="label">The whole ecosystem, one flag away</p>
+      <div class="features">
+        <div class="feature">
+          <h3>Search skills.sh without leaving the CLI</h3>
+          <p><code class="inline">skillbox search react --web</code> queries the public skills.sh directory. Your registry stays the default; the web is always explicit.</p>
+        </div>
+        <div class="feature">
+          <h3>Use once or keep it</h3>
+          <p>Fetch any skill by <code class="inline">owner/repo/skill</code> for one-off use, or <code class="inline">skillbox add</code> it so it resolves by name from then on — always clearly marked unverified.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
       <p class="label">Try it</p>
 <pre><span class="p">$</span> skillbox list "design for chatbot"
 <span class="p">$</span> skillbox search effect
 <span class="p">$</span> skillbox fetch frontend --print
 <span class="p">$</span> skillbox info frontend
 <span class="c"># pull a skill into a temp dir for the agent to use</span>
-<span class="p">$</span> skillbox fetch frontend --to-temp</pre>
+<span class="p">$</span> skillbox fetch frontend --to-temp
+<span class="c"># reach the skills.sh directory on demand</span>
+<span class="p">$</span> skillbox search react --web
+<span class="p">$</span> skillbox add vercel-labs/agent-skills/vercel-react-best-practices</pre>
     </section>
 
     <section id="install">

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#ededed" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round">
+  <!-- isometric box, lid open: skills stay boxed until asked for -->
+  <path d="M12 3 4 7.5v9L12 21l8-4.5v-9L12 3z"/>
+  <path d="M4 7.5 12 12l8-4.5"/>
+  <path d="M12 12v9"/>
+</svg>

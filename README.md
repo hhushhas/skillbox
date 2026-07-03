@@ -1,27 +1,20 @@
 # Skillbox
 
-Skillbox is a small, agent-agnostic CLI for listing and fetching trusted coding-agent skills on demand.
+**Your skills. Loaded only when you ask.**
 
-## Commands
+Install a skill globally and every coding agent starts loading it on its own — wanted or not. Skillbox keeps skills out of the agent's context until you say the word.
 
-```bash
-skillbox list
-skillbox list --category frontend
-skillbox list --names --category frontend
-skillbox list "react guidelines"
-skillbox list "design for chatbot"
-skillbox search effect
-skillbox search ai
-skillbox search --names tokens
-skillbox fetch frontend --print
-skillbox fetch frontend --to-temp
-skillbox info frontend
-skillbox guide
-skillbox guide onboarding
-skillbox guide add-skill
-skillbox cleanup
-skillbox doctor
-```
+## The problem
+
+You find a skill you like, so you install it globally to reuse it across projects. Then the agent starts invoking it by itself. Sometimes that's what you want; often it isn't, and now you're pruning, moving, and renaming skill folders so the agent doesn't grab the wrong thing.
+
+The root cause: Claude Code, Codex, opencode, Cursor, Pi — every harness implements skills differently, but they share one behavior. Once a skill's frontmatter is loaded into context, the agent is bound to it.
+
+## The fix
+
+Skillbox keeps skills outside the harness entirely. No frontmatter is preloaded, so nothing fires by accident. When you say "use this skill", the agent runs `skillbox search`, surfaces the skill, and fetches it — right then, and only then. You decide when a skill enters the conversation.
+
+One CLI, every agent, zero babysitting.
 
 ## Install
 
@@ -37,48 +30,51 @@ Cargo:
 cargo install --git https://github.com/hhushhas/skillbox
 ```
 
-For local development:
+Prebuilt binaries are on the [releases page](https://github.com/hhushhas/skillbox/releases). For local development:
 
 ```bash
 cargo build --release
 cp target/release/skillbox ~/bin/skillbox
 ```
 
-## Download
-
-GitHub releases are at:
-
-```text
-https://github.com/hhushhas/skillbox/releases
-```
-
-macOS Apple Silicon v0.1.8:
+## Usage
 
 ```bash
-curl -L https://github.com/hhushhas/skillbox/releases/download/v0.1.8/skillbox-v0.1.8-aarch64-apple-darwin.tar.gz -o skillbox.tar.gz
-tar -xzf skillbox.tar.gz
-install -m 0755 skillbox-aarch64-apple-darwin/skillbox ~/bin/skillbox
+skillbox list                        # everything
+skillbox list "design for chatbot"   # natural-language query
+skillbox list --category frontend
+skillbox search effect               # keyword search
+skillbox info frontend               # where a skill comes from
+skillbox fetch frontend --print      # print SKILL.md to stdout
+skillbox fetch frontend --to-temp    # pull skill + support files into a temp dir
+skillbox guide                       # agent-facing usage guide
+skillbox cleanup
+skillbox doctor
 ```
+
+## skills.sh on demand
+
+The registry stays the primary, trusted path — but you can reach the whole [skills.sh](https://skills.sh) directory without leaving the CLI:
+
+```bash
+skillbox search react --web                                      # search the skills.sh directory
+skillbox fetch vercel-labs/agent-skills/vercel-react-best-practices --print   # use once, right now
+skillbox add vercel-labs/agent-skills/vercel-react-best-practices             # keep it
+skillbox remove vercel-react-best-practices                      # drop it again
+```
+
+`--web` is always explicit, and external content is always marked unverified — nothing from skills.sh enters a conversation unless you (or your agent, at your instruction) ask for it by full `owner/repo/skill` id. `add` records the skill in `~/.config/skillbox/installed.yaml`; from then on it resolves by short name like any other skill, listed under the `external` category, fetched fresh from its source repo on demand.
+
+External skills are unvetted third-party instructions. Skim `skillbox fetch <ref> --print` before letting an agent load one, and promote skills you rely on into your registry.
 
 ## Registries
 
-Skillbox reads the nearest project registry first:
+Skillbox resolves skills in order:
 
-```text
-.agents/skillbox.yaml
-```
-
-Then it reads configured remote registries from:
-
-```text
-~/.config/skillbox/config.yaml
-```
-
-If no config exists, Skillbox defaults to:
-
-```text
-hhushhas/skillbox-registry
-```
+1. The nearest project registry: `.agents/skillbox.yaml`
+2. Installed external skills: `~/.config/skillbox/installed.yaml`
+3. Remote registries from `~/.config/skillbox/config.yaml`
+4. The default shared registry: `hhushhas/skillbox-registry`
 
 For reusable skills, work in a local checkout of the registry repo rather than adding one-off local config.
 
@@ -93,7 +89,7 @@ skills:
     aliases: [react, nextjs, hooks, components]
 ```
 
-Registry entries can also include resource markers. These appear in `skillbox list` so agents know when to prefer `--to-temp`:
+Entries can also include resource markers, which appear in `skillbox list` so agents know when to prefer `--to-temp`:
 
 ```yaml
 skills:
@@ -105,15 +101,9 @@ skills:
     resources: [refs, scripts]
 ```
 
-## Adding Skills
+## Adding skills
 
-Reusable skills live in the public registry:
-
-```text
-hhushhas/skillbox-registry
-```
-
-Project skills live with the project:
+Reusable skills live in the public registry, `hhushhas/skillbox-registry`. Project skills live with the project:
 
 ```text
 repo/.agents/skillbox.yaml
@@ -122,61 +112,33 @@ repo/.agents/skills.available/<skill-name>/SKILL.md
 
 To add a reusable skill:
 
-1. Add `skills/<skill-name>/SKILL.md` to the registry repo.
-2. Keep optional support files inside the same skill folder, such as `references/`, `scripts/`, `assets/`, or `agents/`.
-3. Add the skill to `registry.yaml`.
-4. Pick one category from the fixed list below.
-5. Write a canonical one-line description.
-6. Add aliases for natural-language search.
-7. Add `resources` when the skill has support folders such as `references/`, `scripts/`, `assets/`, `agents/`, `templates/`, `tests/`, or `evals/`.
-8. Run `skillbox doctor`, `skillbox search "<query>"`, and `skillbox fetch <skill-name> --print` or `--to-temp`.
+1. Add `skills/<skill-name>/SKILL.md` to the registry repo, with any support files (`references/`, `scripts/`, `assets/`, `agents/`) in the same folder.
+2. Add the skill to `registry.yaml`: pick one category from the fixed list, write a canonical one-line description, and add aliases for natural-language search.
+3. Add `resources` when the skill has support folders.
+4. Verify with `skillbox doctor`, `skillbox search "<query>"`, and `skillbox fetch <skill-name> --print` or `--to-temp`.
 
-To update an existing skill, run `skillbox info <skill-name>` to find whether it comes from the project registry or a remote registry, edit the shown registry entry and skill folder, then run the same verification commands.
+To update an existing skill, run `skillbox info <skill-name>` to find its registry, edit the entry and skill folder, then run the same verification commands.
 
-## Adding From skills.sh
+### Importing from skills.sh
 
-Treat a `skills.sh` URL as a discovery page, not as the canonical source.
+For personal use, `skillbox add owner/repo/skill` is enough. To promote a skill into a shared registry, treat the `skills.sh` URL as a discovery page, not the canonical source — never scrape rendered `skills.sh` HTML as the skill artifact.
 
-1. Open the `skills.sh` page and find the backing GitHub repo/path.
-2. Fetch the raw GitHub `SKILL.md`.
-3. Copy `SKILL.md` and any sibling `references/`, `scripts/`, `assets/`, or `agents/` into `skills/<skill-name>/`.
-4. Add a normalized entry to `registry.yaml`.
-5. Add `resources` when the skill has support folders such as `references/`, `scripts/`, `assets/`, `agents/`, `templates/`, `tests/`, or `evals/`.
-6. Verify with:
+1. Find the backing GitHub repo/path on the `skills.sh` page (or via `skillbox search <query> --web`).
+2. Fetch the raw GitHub `SKILL.md` and copy it (plus sibling support folders) into `skills/<skill-name>/`.
+3. Add a normalized entry to `registry.yaml`, then verify and publish:
 
 ```bash
 ruby -e 'require "yaml"; YAML.load_file("registry.yaml"); puts "ok"'
-skillbox list "<natural query>"
 skillbox search "<natural query>"
 skillbox fetch <skill-name> --print
-skillbox fetch <skill-name> --to-temp
-```
-
-Then publish:
-
-```bash
 git add registry.yaml skills/<skill-name>
 git commit -m "Add <skill-name> skill"
 git push
 ```
 
-Do not scrape rendered `skills.sh` HTML as the skill artifact. Use the raw GitHub files, then normalize the registry description and aliases.
+### Canonical descriptions
 
-## Canonical Descriptions
-
-`registry.yaml` descriptions are the model-facing discovery text. Keep them consistent:
-
-```text
-- one line only
-- 70-150 characters preferred
-- start with a practical capability, not marketing language
-- include the main trigger or use case
-- name important scope only when it changes routing
-- avoid hype such as "comprehensive", "ultimate", or "powerful"
-- avoid implementation history, repo paths, and install notes
-```
-
-Preferred shape:
+`registry.yaml` descriptions are the model-facing discovery text. One line, 70–150 characters, starting with a practical capability — no hype ("comprehensive", "ultimate"), no implementation history or install notes. Preferred shape:
 
 ```text
 <capability/action> for <domain/task>; use when <trigger or situation>.
@@ -186,18 +148,13 @@ Examples:
 
 ```text
 Build and polish frontend UI; use for layouts, components, accessibility, and visual QA.
-Work with shadcn/ui; use for component installs, registry usage, styling, and composition.
 Run browser automation; use for web flows, local app QA, screenshots, and form interaction.
 ```
 
-## Categories
+### Categories
 
-```text
-frontend
-backend
-ai
-cloud
-design
-browser
-project
-```
+`frontend` · `backend` · `ai` · `cloud` · `design` · `browser` · `project`
+
+## License
+
+MIT
