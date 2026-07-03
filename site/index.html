@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Skillbox — skills loaded only when you ask</title>
+  <meta name="description" content="Skillbox keeps coding-agent skills out of the context until you ask for them. No frontmatter preloading, no accidental invocation — one CLI for every agent." />
+  <style>
+    :root {
+      --bg: #0a0a0a;
+      --fg: #ededed;
+      --muted: #a1a1a1;
+      --dim: #666;
+      --border: #262626;
+      --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: var(--sans);
+      line-height: 1.6;
+      font-size: 15px;
+      -webkit-font-smoothing: antialiased;
+    }
+    .wrap { max-width: 680px; margin: 0 auto; padding: 0 24px; }
+    a { color: var(--fg); text-decoration: none; }
+
+    nav {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 20px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    nav .logo { font-weight: 600; letter-spacing: -0.2px; }
+    nav .links { display: flex; gap: 20px; font-size: 14px; }
+    nav .links a { color: var(--muted); }
+    nav .links a:hover { color: var(--fg); }
+
+    header { padding: 96px 0 72px; }
+    h1 {
+      font-size: 40px; line-height: 1.15; font-weight: 600;
+      letter-spacing: -1.2px; margin: 0 0 16px;
+    }
+    .tagline { color: var(--muted); font-size: 16px; max-width: 480px; margin: 0 0 32px; }
+    .cta { display: flex; gap: 12px; }
+    .btn {
+      display: inline-flex; align-items: center;
+      padding: 8px 16px; border-radius: 6px;
+      font-size: 14px; font-weight: 500;
+      transition: opacity 0.15s ease, border-color 0.15s ease;
+    }
+    .btn.primary { background: var(--fg); color: var(--bg); }
+    .btn.primary:hover { opacity: 0.85; }
+    .btn.ghost { border: 1px solid var(--border); color: var(--muted); }
+    .btn.ghost:hover { border-color: var(--dim); color: var(--fg); }
+
+    section { padding: 40px 0; border-top: 1px solid var(--border); }
+    .label {
+      font-family: var(--mono); font-size: 12px; color: var(--dim);
+      text-transform: uppercase; letter-spacing: 1px; margin: 0 0 20px;
+    }
+
+    .agent-row { display: flex; gap: 32px; flex-wrap: wrap; }
+    .agent { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 14px; }
+    .agent img { width: 20px; height: 20px; object-fit: contain; opacity: 0.7; }
+    .agent.opencode img { border-radius: 4px; }
+    .agent.codex img { filter: invert(1); }
+
+    pre {
+      margin: 0; padding: 20px;
+      border: 1px solid var(--border); border-radius: 8px;
+      font-family: var(--mono); font-size: 13px; line-height: 1.9;
+      overflow-x: auto; color: var(--fg);
+    }
+    pre .p { color: var(--dim); user-select: none; }
+    pre .c { color: var(--dim); }
+
+    .features { display: grid; gap: 28px; }
+    .feature h3 { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
+    .feature p { margin: 0; color: var(--muted); font-size: 14px; }
+    code.inline {
+      font-family: var(--mono); font-size: 0.9em;
+      border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px;
+    }
+
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 32px 0 64px;
+      color: var(--dim); font-size: 13px;
+    }
+    footer a { color: var(--muted); }
+    footer a:hover { color: var(--fg); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <nav>
+      <span class="logo">Skillbox</span>
+      <div class="links">
+        <a href="#install">Install</a>
+        <a href="https://github.com/hhushhas/skillbox" rel="noopener">GitHub</a>
+      </div>
+    </nav>
+
+    <header>
+      <h1>Your skills. Loaded only when you ask.</h1>
+      <p class="tagline">Install a skill globally and every agent starts loading it on its own — wanted or not. Skillbox keeps skills out of the context until you say the word.</p>
+      <div class="cta">
+        <a class="btn primary" href="#install">Install</a>
+        <a class="btn ghost" href="https://github.com/hhushhas/skillbox" rel="noopener">GitHub</a>
+      </div>
+    </header>
+
+    <section>
+      <p class="label">The problem</p>
+      <div class="features">
+        <div class="feature">
+          <h3>Global skills fire on their own</h3>
+          <p>You install a skill globally to reuse it across projects. Then the agent starts invoking it by itself — sometimes you want that, often you don't.</p>
+        </div>
+        <div class="feature">
+          <h3>Frontmatter means preloading</h3>
+          <p>Claude Code, Codex, opencode, Cursor, Pi — every harness implements skills differently, but they share one behavior: once a skill's frontmatter is loaded, the agent is bound to it.</p>
+        </div>
+        <div class="feature">
+          <h3>So you end up managing skills</h3>
+          <p>Pruning, moving, renaming — babysitting your skill folder so the agent doesn't grab the wrong thing.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <p class="label">The fix</p>
+      <div class="features">
+        <div class="feature">
+          <h3>No preloading</h3>
+          <p>Skillbox keeps skills outside the harness. Nothing sits in the agent's context, so nothing fires by accident.</p>
+        </div>
+        <div class="feature">
+          <h3>On demand, by name</h3>
+          <p>Say "use this skill" and the agent searches Skillbox, surfaces the skill, and loads it — right then, and only then.</p>
+        </div>
+        <div class="feature">
+          <h3>Total control</h3>
+          <p>You decide when a skill enters the conversation. One CLI, every agent, zero babysitting.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <p class="label">Works with your agent</p>
+      <div class="agent-row">
+        <div class="agent"><img src="logos/claude-code.svg" alt="Claude Code logo" /> Claude Code</div>
+        <div class="agent codex"><img src="logos/codex.svg" alt="Codex logo" /> Codex</div>
+        <div class="agent"><img src="logos/cursor.svg" alt="Cursor logo" /> Cursor</div>
+        <div class="agent opencode"><img src="logos/opencode.svg" alt="opencode logo" /> opencode</div>
+        <div class="agent"><img src="logos/pi-coding-agent.svg" alt="Pi Coding Agent logo" /> Pi</div>
+      </div>
+    </section>
+
+    <section>
+      <p class="label">Try it</p>
+<pre><span class="p">$</span> skillbox list "design for chatbot"
+<span class="p">$</span> skillbox search effect
+<span class="p">$</span> skillbox fetch frontend --print
+<span class="p">$</span> skillbox info frontend
+<span class="c"># pull a skill into a temp dir for the agent to use</span>
+<span class="p">$</span> skillbox fetch frontend --to-temp</pre>
+    </section>
+
+    <section id="install">
+      <p class="label">Install</p>
+<pre><span class="c"># Homebrew</span>
+<span class="p">$</span> brew install hhushhas/tap/skillbox
+
+<span class="c"># Cargo</span>
+<span class="p">$</span> cargo install --git https://github.com/hhushhas/skillbox</pre>
+    </section>
+
+    <footer>
+      Skillbox &middot; <a href="https://github.com/hhushhas/skillbox" rel="noopener">GitHub</a> &middot; <a href="https://github.com/hhushhas/skillbox/releases" rel="noopener">Releases</a>
+    </footer>
+  </div>
+</body>
+</html>
