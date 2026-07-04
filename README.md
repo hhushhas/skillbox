@@ -30,7 +30,7 @@ Cargo:
 cargo install --git https://github.com/hhushhas/skillbox
 ```
 
-Prebuilt binaries are on the [releases page](https://github.com/hhushhas/skillbox/releases). For local development:
+Prebuilt binaries for macOS, Linux, and Windows are attached to tagged releases on the [releases page](https://github.com/hhushhas/skillbox/releases). For local development:
 
 ```bash
 cargo build --release
@@ -60,12 +60,13 @@ Local registries stay the trusted path, but you can reach the whole [skills.sh](
 skillbox search react --web                                      # search the skills.sh directory
 skillbox fetch vercel-labs/agent-skills/vercel-react-best-practices --print   # use once, right now
 skillbox add vercel-labs/agent-skills/vercel-react-best-practices             # keep it
+skillbox promote vercel-react-best-practices --category frontend              # trust it locally
 skillbox remove vercel-react-best-practices                      # drop it again
 ```
 
 `--web` is always explicit, and external content is always marked unverified — nothing from skills.sh enters a conversation unless you (or your agent, at your instruction) ask for it by full `owner/repo/skill` id. `add` records the skill in `~/.skillbox/installed.yaml`; from then on it resolves by short name like any other skill, listed under the `external` category, fetched fresh from its source repo on demand.
 
-External skills are unvetted third-party instructions. Skim `skillbox fetch <ref> --print` before letting an agent load one, and promote skills you rely on into your local registry.
+External skills are unvetted third-party instructions. Skim `skillbox fetch <ref> --print` before letting an agent load one, and promote skills you rely on into your local registry with `skillbox promote <ref> --category <category>`.
 
 ## Registries
 
@@ -136,11 +137,11 @@ To update an existing skill, run `skillbox info <skill-name>` to find its regist
 
 ### Importing from skills.sh
 
-For personal use, `skillbox add owner/repo/skill` is enough. To promote a skill into your global registry or a shared remote registry, treat the `skills.sh` URL as a discovery page, not the canonical source — never scrape rendered `skills.sh` HTML as the skill artifact.
+For personal use, `skillbox add owner/repo/skill` is enough. To promote a skill into your global registry, run `skillbox promote <skill> --category <category>`. For a shared remote registry, treat the `skills.sh` URL as a discovery page, not the canonical source — never scrape rendered `skills.sh` HTML as the skill artifact.
 
 1. Find the backing GitHub repo/path on the `skills.sh` page (or via `skillbox search <query> --web`).
-2. Fetch the raw GitHub `SKILL.md` and copy it (plus sibling support folders) into `~/.skillbox/skills/<skill-name>/` or the shared registry's skills folder.
-3. Add a normalized entry to `~/.skillbox/skillbox.yaml` or the shared registry file, then verify:
+2. For local trust, run `skillbox promote owner/repo/skill --category <category>`; for a shared registry, fetch the raw GitHub `SKILL.md` and copy it (plus sibling support folders) into the shared registry's skills folder.
+3. Add or review the normalized entry, then verify:
 
 ```bash
 ruby -e 'require "yaml"; YAML.load_file(File.expand_path("~/.skillbox/skillbox.yaml")); puts "ok"'

@@ -46,6 +46,8 @@ enum Command {
     Info(InfoArgs),
     /// Add an external skills.sh skill to the local installed registry.
     Add(AddArgs),
+    /// Promote an external skill into the trusted global registry.
+    Promote(PromoteArgs),
     /// Remove a skill from the local installed registry.
     Remove(RemoveArgs),
     /// Print short setup and maintenance instructions.
@@ -96,6 +98,15 @@ struct AddArgs {
 }
 
 #[derive(Args)]
+struct PromoteArgs {
+    /// External skill reference owner/repo/skillId, or installed external skill id.
+    reference: String,
+    /// Trusted registry category.
+    #[arg(long, value_parser = parse_promote_category)]
+    category: String,
+}
+
+#[derive(Args)]
 struct RemoveArgs {
     /// Installed skill id to remove.
     name: String,
@@ -121,7 +132,7 @@ struct RemoteRegistry {
     reference: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct RegistryFile {
     version: u8,
     skills: BTreeMap<String, SkillEntry>,
@@ -144,14 +155,14 @@ struct WebSearchSkill {
     installs: u64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct SkillEntry {
     category: String,
     description: String,
     path: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     aliases: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     resources: Vec<String>,
 }
 
@@ -219,6 +230,7 @@ fn run() -> Result<()> {
         Command::Fetch(args) => fetch(args),
         Command::Info(args) => info(args),
         Command::Add(args) => add(args),
+        Command::Promote(args) => promote(args),
         Command::Remove(args) => remove(args),
         Command::Guide(args) => guide(args),
         Command::Cleanup => cleanup(),
@@ -290,7 +302,9 @@ fn list_web(args: ListArgs) -> Result<()> {
     let response = serde_json::from_str::<WebSearchResponse>(&body)
         .with_context(|| format!("failed to parse skills.sh response from {}", url))?;
 
-    eprintln!("note: unvetted third-party content from skills.sh; load with skillbox fetch <id> --print.");
+    eprintln!(
+        "note: unvetted third-party content from skills.sh; load with skillbox fetch <id> --print."
+    );
 
     let skills = response
         .skills
@@ -311,10 +325,7 @@ fn list_web(args: ListArgs) -> Result<()> {
     }
 
     for skill in skills {
-        println!(
-            "{} [unverified, {} installs]",
-            skill.id, skill.installs
-        );
+        println!("{} [unverified, {} installs]", skill.id, skill.installs);
     }
     Ok(())
 }
@@ -612,6 +623,36 @@ fn add(args: AddArgs) -> Result<()> {
     Ok(())
 }
 
+fn promote(args: PromoteArgs) -> Result<()> {
+    let root = skillbox_config_dir().ok_or_else(|| anyhow!("failed to locate config directory"))?;
+    let registry_path = root.join("skillbox.yaml");
+    let skill = resolve_promoted_skill(&args.reference)?;
+    let name = skill.reference.skill_id.clone();
+    let destination = root.join("skills").join(&name);
+    let mut registry = read_registry_file_at(&registry_path)?;
+
+    remove_existing_path(&destination)?;
+    copy_external_skill_to_temp(&skill.reference, &skill.branch, &skill.path, &destination)?;
+
+    let entry = promoted_skill_entry(
+        &args.category,
+        &skill.markdown,
+        &name,
+        resource_directories(&destination)?,
+    );
+    validate_entry(&name, &entry)?;
+    registry.skills.insert(name.clone(), entry);
+    write_registry_file_at(&registry_path, &registry)?;
+    remove_installed_skill_if_present(&skill)?;
+
+    println!("promoted {} to {}", name, destination.display());
+    println!(
+        "hint: edit aliases in {} to improve search",
+        registry_path.display()
+    );
+    Ok(())
+}
+
 fn remove(args: RemoveArgs) -> Result<()> {
     let path = installed_path().ok_or_else(|| anyhow!("failed to locate config directory"))?;
     let mut installed = read_installed_file_at(&path)?;
@@ -638,7 +679,7 @@ fn guide(args: GuideArgs) -> Result<()> {
             println!("3. Load: skillbox fetch <skill> --print");
             println!("4. Full folder: use --to-temp when resources are listed");
             println!(
-                "5. Optional web: skillbox search \"<task>\" --web; external results are unverified and can be fetched by full id"
+                "5. Optional web: skillbox search \"<task>\" --web; external results are unverified; promote trusted keepers with skillbox promote <ref> --category <category>"
             );
         }
         Some("onboarding") => {
@@ -662,7 +703,7 @@ fn guide(args: GuideArgs) -> Result<()> {
             println!("remote config: ~/.skillbox/config.yaml (opt-in)");
             println!("remote example: registries: [{{owner: hhushhas, repo: skillbox-registry}}]");
             println!(
-                "external installs: skillbox add owner/repo/skillId records ~/.skillbox/installed.yaml; skills.sh stays explicit via --web/add; remove with skillbox remove <skillId>"
+                "external installs: skillbox add owner/repo/skillId records ~/.skillbox/installed.yaml; promote with skillbox promote <skillId> --category <category>; remove with skillbox remove <skillId>"
             );
         }
         Some("add-skill") => {
@@ -779,6 +820,18 @@ fn parse_category(value: &str) -> std::result::Result<String, String> {
             value,
             ALLOWED_CATEGORIES.join(", ")
         ))
+    }
+}
+
+fn parse_promote_category(value: &str) -> std::result::Result<String, String> {
+    let category = parse_category(value)?;
+    if category == "external" {
+        Err(format!(
+            "category 'external' cannot be promoted; expected one of: {}",
+            ALLOWED_CATEGORIES.join(", ")
+        ))
+    } else {
+        Ok(category)
     }
 }
 
@@ -950,6 +1003,39 @@ fn load_global_registry() -> Result<Option<(PathBuf, RegistryFile)>> {
     }
     let registry = read_yaml::<RegistryFile>(&path)?;
     Ok(Some((root, registry)))
+}
+
+fn read_registry_file_at(path: &Path) -> Result<RegistryFile> {
+    if !path.exists() {
+        return Ok(empty_registry_file());
+    }
+
+    let registry = read_yaml::<RegistryFile>(path)?;
+    if registry.version != 1 {
+        bail!(
+            "unsupported registry version {} from {}",
+            registry.version,
+            path.display()
+        );
+    }
+    Ok(registry)
+}
+
+fn write_registry_file_at(path: &Path, registry: &RegistryFile) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let text = serde_yaml::to_string(registry)
+        .with_context(|| format!("failed to serialize {}", path.display()))?;
+    fs::write(path, text).with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn empty_registry_file() -> RegistryFile {
+    RegistryFile {
+        version: 1,
+        skills: BTreeMap::new(),
+    }
 }
 
 fn read_installed_file_at(path: &Path) -> Result<InstalledFile> {
@@ -1152,6 +1238,42 @@ fn resolve_external_skill(reference: &ExternalRef) -> Result<ExternalSkill> {
     })
 }
 
+fn resolve_promoted_skill(reference: &str) -> Result<ExternalSkill> {
+    if let Some(reference) = parse_external_ref(reference)? {
+        return resolve_external_skill(&reference);
+    }
+
+    let path = installed_path().ok_or_else(|| anyhow!("failed to locate config directory"))?;
+    let installed = read_installed_file_at(&path)?;
+    let entry = installed
+        .skills
+        .get(reference)
+        .ok_or_else(|| anyhow!("installed external skill '{}' was not found", reference))?;
+
+    resolve_installed_external_skill(reference, entry)
+}
+
+fn resolve_installed_external_skill(
+    name: &str,
+    entry: &InstalledSkillEntry,
+) -> Result<ExternalSkill> {
+    let (owner, repo) = parse_installed_source(&entry.source)?;
+    let (branch, archive) = fetch_repo_archive(owner, repo)?;
+    let markdown_path = format!("{}/SKILL.md", entry.path.trim_end_matches('/'));
+    let markdown = read_archive_file(&archive, &markdown_path)?;
+
+    Ok(ExternalSkill {
+        reference: ExternalRef {
+            owner: owner.to_string(),
+            repo: repo.to_string(),
+            skill_id: name.to_string(),
+        },
+        branch,
+        path: entry.path.clone(),
+        markdown,
+    })
+}
+
 fn fetch_repo_archive(owner: &str, repo: &str) -> Result<(String, Vec<u8>)> {
     let main_url = repo_archive_url(owner, repo, "main");
     match fetch_bytes(&main_url) {
@@ -1343,6 +1465,69 @@ fn parse_installed_source(source: &str) -> Result<(&str, &str)> {
         bail!("installed skill source '{}' must use owner/repo", source);
     }
     Ok((parts[0], parts[1]))
+}
+
+fn promoted_skill_entry(
+    category: &str,
+    markdown: &str,
+    name: &str,
+    resources: Vec<String>,
+) -> SkillEntry {
+    SkillEntry {
+        category: category.to_string(),
+        description: description_from_markdown(markdown),
+        path: format!("skills/{name}"),
+        aliases: Vec::new(),
+        resources,
+    }
+}
+
+fn resource_directories(path: &Path) -> Result<Vec<String>> {
+    let mut resources = Vec::new();
+    for entry in fs::read_dir(path).with_context(|| format!("failed to read {}", path.display()))? {
+        let entry = entry.with_context(|| format!("failed to read {}", path.display()))?;
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("failed to read file type for {}", entry.path().display()))?;
+        if file_type.is_dir() {
+            resources.push(entry.file_name().to_string_lossy().to_string());
+        }
+    }
+    resources.sort();
+    Ok(resources)
+}
+
+fn remove_installed_skill_if_present(skill: &ExternalSkill) -> Result<()> {
+    let Some(path) = installed_path() else {
+        return Ok(());
+    };
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let mut installed = read_installed_file_at(&path)?;
+    let name = &skill.reference.skill_id;
+    let source = format!("{}/{}", skill.reference.owner, skill.reference.repo);
+    let Some(entry) = installed.skills.get(name) else {
+        return Ok(());
+    };
+    if entry.source != source {
+        return Ok(());
+    }
+
+    installed.skills.remove(name);
+    write_installed_file_at(&path, &installed)
+}
+
+fn remove_existing_path(path: &Path) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    if path.is_dir() {
+        fs::remove_dir_all(path).with_context(|| format!("failed to remove {}", path.display()))
+    } else {
+        fs::remove_file(path).with_context(|| format!("failed to remove {}", path.display()))
+    }
 }
 
 fn copy_dir(source: &Path, destination: &Path) -> Result<()> {
@@ -1762,7 +1947,46 @@ mod tests {
             parse_category("frontend").expect("known category"),
             "frontend"
         );
+        assert_eq!(
+            parse_category("external").expect("external category"),
+            "external"
+        );
         assert!(parse_category("sales").is_err());
+    }
+
+    #[test]
+    fn promote_category_parser_rejects_external() {
+        assert_eq!(
+            parse_promote_category("backend").expect("known category"),
+            "backend"
+        );
+        assert!(parse_promote_category("external").is_err());
+        assert!(parse_promote_category("sales").is_err());
+    }
+
+    #[test]
+    fn promoted_entry_uses_markdown_description_and_resource_directories() {
+        let root = tempfile::tempdir().expect("tempdir");
+        fs::create_dir(root.path().join("scripts")).expect("scripts dir");
+        fs::create_dir(root.path().join("references")).expect("references dir");
+        fs::write(root.path().join("SKILL.md"), "# Example").expect("skill file");
+
+        let resources = resource_directories(root.path()).expect("resources");
+        let entry = promoted_skill_entry(
+            "ai",
+            "---\ndescription: Use for careful agent orchestration.\n---\n# Fallback",
+            "agent-orchestration",
+            resources,
+        );
+
+        assert_eq!(entry.category, "ai");
+        assert_eq!(entry.description, "Use for careful agent orchestration.");
+        assert_eq!(entry.path, "skills/agent-orchestration");
+        assert!(entry.aliases.is_empty());
+        assert_eq!(
+            entry.resources,
+            vec!["references".to_string(), "scripts".to_string()]
+        );
     }
 
     #[test]
