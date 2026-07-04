@@ -11,7 +11,6 @@ use clap::{Args, Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_REGISTRY_OWNER: &str = "hhushhas";
-const DEFAULT_REGISTRY_REPO: &str = "skillbox-registry";
 const DEFAULT_REGISTRY_REF: &str = "main";
 const MAX_SEARCH_RESULTS: usize = 8;
 const APPROX_CHARS_PER_TOKEN: usize = 4;
@@ -180,6 +179,7 @@ struct ResolvedSkill {
 #[derive(Debug, Clone)]
 enum Source {
     Project { root: PathBuf },
+    Global { root: PathBuf },
     Remote { registry: RemoteRegistry },
     Installed { source: String, path: String },
 }
@@ -232,6 +232,7 @@ fn list(args: ListArgs) -> Result<()> {
     }
 
     let skills = load_skills()?;
+    let no_skills_loaded = skills.is_empty();
     let filtered_by_category = args.category.is_some();
 
     let mut matches = Vec::new();
@@ -276,6 +277,9 @@ fn list(args: ListArgs) -> Result<()> {
             println!("{}", format_list_line(&skill, filtered_by_category));
         }
     }
+    if no_skills_loaded {
+        print_empty_registry_hint();
+    }
     Ok(())
 }
 
@@ -286,7 +290,7 @@ fn list_web(args: ListArgs) -> Result<()> {
     let response = serde_json::from_str::<WebSearchResponse>(&body)
         .with_context(|| format!("failed to parse skills.sh response from {}", url))?;
 
-    eprintln!("note: web results are unvetted third-party content from skills.sh.");
+    eprintln!("note: unvetted third-party content from skills.sh; load with skillbox fetch <id> --print.");
 
     let skills = response
         .skills
@@ -308,8 +312,8 @@ fn list_web(args: ListArgs) -> Result<()> {
 
     for skill in skills {
         println!(
-            "{} [web, {} installs]: unverified; fetch with skillbox fetch {}",
-            skill.id, skill.installs, skill.id
+            "{} [unverified, {} installs]",
+            skill.id, skill.installs
         );
     }
     Ok(())
@@ -531,6 +535,14 @@ fn info(args: InfoArgs) -> Result<()> {
                 "update: edit the project registry and skill folder, then run doctor/search/fetch"
             );
         }
+        Source::Global { root } => {
+            println!("source: global");
+            println!("registry: {}", root.join("skillbox.yaml").display());
+            println!("skill: {}", root.join(&skill.entry.path).display());
+            println!(
+                "update: edit the global registry and skill folder, then run doctor/search/fetch"
+            );
+        }
         Source::Remote { registry } => {
             println!("source: remote");
             println!("registry: {}", remote_registry_label(registry));
@@ -631,26 +643,33 @@ fn guide(args: GuideArgs) -> Result<()> {
         }
         Some("onboarding") => {
             println!("1. Run: skillbox doctor");
-            println!("2. Explore: skillbox list; skillbox search \"<task>\"");
-            println!("3. Migrate useful global skills from ~/.agents/skills or ~/.codex/skills");
             println!(
-                "4. Add shared skills to a registry; add project skills to .agents/skillbox.yaml"
+                "2. Add personal skills to ~/.skillbox/skillbox.yaml with folders under ~/.skillbox/skills/"
             );
-            println!("5. Load only when useful: skillbox fetch <skill> --print or --to-temp");
+            println!("3. Explore: skillbox list; skillbox search \"<task>\"");
+            println!(
+                "4. Layer project skills with .agents/skillbox.yaml; add remote registries only via ~/.skillbox/config.yaml"
+            );
+            println!(
+                "5. Load only when useful: skillbox fetch <skill> --print or --to-temp; skills.sh stays explicit via --web/add"
+            );
         }
         Some("registry") => {
-            println!("shared registry: local checkout of the registry repo");
+            println!("global registry: ~/.skillbox/skillbox.yaml");
+            println!("global skills: ~/.skillbox/skills/<skill>/SKILL.md");
             println!("project registry: .agents/skillbox.yaml");
             println!("project skills: .agents/skills.available/<skill>/SKILL.md");
-            println!("remote config: ~/.config/skillbox/config.yaml");
-            println!("default remote: hhushhas/skillbox-registry/main");
+            println!("remote config: ~/.skillbox/config.yaml (opt-in)");
+            println!("remote example: registries: [{{owner: hhushhas, repo: skillbox-registry}}]");
             println!(
-                "external installs: skillbox add owner/repo/skillId records ~/.config/skillbox/installed.yaml; remove with skillbox remove <skillId>"
+                "external installs: skillbox add owner/repo/skillId records ~/.skillbox/installed.yaml; skills.sh stays explicit via --web/add; remove with skillbox remove <skillId>"
             );
         }
         Some("add-skill") => {
-            println!("1. For reusable skills, edit a local checkout of the registry repo");
-            println!("2. Add skills/<skill>/SKILL.md or .agents/skills.available/<skill>/SKILL.md");
+            println!("1. For reusable personal skills, edit ~/.skillbox/skillbox.yaml");
+            println!(
+                "2. Add ~/.skillbox/skills/<skill>/SKILL.md or project .agents/skills.available/<skill>/SKILL.md"
+            );
             println!(
                 "3. Add registry entry: category, description, path, aliases, optional resources"
             );
@@ -699,7 +718,7 @@ fn doctor() -> Result<()> {
             if path.exists() {
                 ""
             } else {
-                " (missing, using default)"
+                " (missing, no remotes configured)"
             }
         );
     }
@@ -714,6 +733,17 @@ fn doctor() -> Result<()> {
             );
         }
         None => println!("project: none"),
+    }
+
+    match load_global_registry()? {
+        Some((root, registry)) => {
+            println!(
+                "global: {} ({} skills)",
+                root.join("skillbox.yaml").display(),
+                registry.skills.len()
+            );
+        }
+        None => println!("global: none"),
     }
 
     match installed_path() {
@@ -768,17 +798,11 @@ fn load_skills() -> Result<Vec<ResolvedSkill>> {
     let mut merged = BTreeMap::<String, ResolvedSkill>::new();
 
     if let Some((root, registry)) = find_project_registry()? {
-        for (name, entry) in registry.skills {
-            validate_entry(&name, &entry)?;
-            merged.insert(
-                name.clone(),
-                ResolvedSkill {
-                    name,
-                    entry,
-                    source: Source::Project { root: root.clone() },
-                },
-            );
-        }
+        merge_registry_skills(&mut merged, registry, Source::Project { root })?;
+    }
+
+    if let Some((root, registry)) = load_global_registry()? {
+        merge_registry_skills(&mut merged, registry, Source::Global { root })?;
     }
 
     if let Some(path) = installed_path()
@@ -804,7 +828,17 @@ fn load_skills() -> Result<Vec<ResolvedSkill>> {
     }
 
     for remote in configured_registries()? {
-        let registry = load_remote_registry(&remote)?;
+        let registry = match load_remote_registry(&remote) {
+            Ok(registry) => registry,
+            Err(error) => {
+                eprintln!(
+                    "warning: skipping registry {}: {:#}",
+                    remote_registry_label(&remote),
+                    error
+                );
+                continue;
+            }
+        };
         for (name, entry) in registry.skills {
             validate_entry(&name, &entry)?;
             merged.entry(name.clone()).or_insert(ResolvedSkill {
@@ -818,6 +852,22 @@ fn load_skills() -> Result<Vec<ResolvedSkill>> {
     }
 
     Ok(merged.into_values().collect())
+}
+
+fn merge_registry_skills(
+    merged: &mut BTreeMap<String, ResolvedSkill>,
+    registry: RegistryFile,
+    source: Source,
+) -> Result<()> {
+    for (name, entry) in registry.skills {
+        validate_entry(&name, &entry)?;
+        merged.entry(name.clone()).or_insert(ResolvedSkill {
+            name,
+            entry,
+            source: source.clone(),
+        });
+    }
+    Ok(())
 }
 
 fn validate_entry(name: &str, entry: &SkillEntry) -> Result<()> {
@@ -849,30 +899,31 @@ fn validate_entry(name: &str, entry: &SkillEntry) -> Result<()> {
 
 fn configured_registries() -> Result<Vec<RemoteRegistry>> {
     let Some(path) = config_path() else {
-        return Ok(vec![default_remote_registry()]);
+        return Ok(Vec::new());
     };
     if !path.exists() {
-        return Ok(vec![default_remote_registry()]);
+        return Ok(Vec::new());
     }
 
-    let config = read_yaml::<Config>(&path)?;
-    let registries = config
-        .registries
-        .filter(|registries| !registries.is_empty())
-        .unwrap_or_else(|| vec![default_remote_registry()]);
-    Ok(registries)
+    let text =
+        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
+    if text.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let config = serde_yaml::from_str::<Config>(&text)
+        .with_context(|| format!("failed to parse {}", path.display()))?;
+    Ok(registries_from_config(Some(config)))
 }
 
-fn default_remote_registry() -> RemoteRegistry {
-    RemoteRegistry {
-        owner: Some(DEFAULT_REGISTRY_OWNER.to_string()),
-        repo: DEFAULT_REGISTRY_REPO.to_string(),
-        reference: Some(DEFAULT_REGISTRY_REF.to_string()),
-    }
+fn registries_from_config(config: Option<Config>) -> Vec<RemoteRegistry> {
+    config
+        .and_then(|config| config.registries)
+        .unwrap_or_default()
 }
 
 fn skillbox_config_dir() -> Option<PathBuf> {
-    dirs::config_dir().map(|dir| dir.join("skillbox"))
+    dirs::home_dir().map(|home| home.join(".skillbox"))
 }
 
 fn config_path() -> Option<PathBuf> {
@@ -886,7 +937,19 @@ fn installed_path() -> Option<PathBuf> {
 fn installed_path_display() -> String {
     installed_path()
         .map(|path| path.display().to_string())
-        .unwrap_or_else(|| "~/.config/skillbox/installed.yaml".to_string())
+        .unwrap_or_else(|| "~/.skillbox/installed.yaml".to_string())
+}
+
+fn load_global_registry() -> Result<Option<(PathBuf, RegistryFile)>> {
+    let Some(root) = dirs::home_dir().map(|home| home.join(".skillbox")) else {
+        return Ok(None);
+    };
+    let path = root.join("skillbox.yaml");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let registry = read_yaml::<RegistryFile>(&path)?;
+    Ok(Some((root, registry)))
 }
 
 fn read_installed_file_at(path: &Path) -> Result<InstalledFile> {
@@ -924,7 +987,11 @@ fn empty_installed_file() -> InstalledFile {
 
 fn find_project_registry() -> Result<Option<(PathBuf, RegistryFile)>> {
     let mut current = std::env::current_dir().context("failed to read current directory")?;
+    let home = dirs::home_dir();
     loop {
+        if home.as_ref().is_some_and(|home| current == *home) {
+            return Ok(None);
+        }
         let candidate = current.join(".agents").join("skillbox.yaml");
         if candidate.exists() {
             let registry = read_yaml::<RegistryFile>(&candidate)?;
@@ -955,7 +1022,7 @@ fn load_remote_registry(remote: &RemoteRegistry) -> Result<RegistryFile> {
 
 fn read_skill_markdown(skill: &ResolvedSkill) -> Result<String> {
     match &skill.source {
-        Source::Project { root } => {
+        Source::Project { root } | Source::Global { root } => {
             let path = root.join(&skill.entry.path).join("SKILL.md");
             fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))
         }
@@ -976,7 +1043,7 @@ fn copy_skill_to_temp(skill: &ResolvedSkill) -> Result<PathBuf> {
     ));
 
     match &skill.source {
-        Source::Project { root } => {
+        Source::Project { root } | Source::Global { root } => {
             let source = root.join(&skill.entry.path);
             copy_dir(&source, &destination)?;
         }
@@ -1443,6 +1510,12 @@ fn warn_unverified_if_external(skill: &ResolvedSkill) {
     }
 }
 
+fn print_empty_registry_hint() {
+    eprintln!(
+        "hint: no skills loaded; global skills live in ~/.skillbox/skillbox.yaml with folders under ~/.skillbox/skills/; remote registries are opt-in via ~/.skillbox/config.yaml; see skillbox guide onboarding."
+    );
+}
+
 fn http_client() -> reqwest::blocking::Client {
     reqwest::blocking::Client::builder()
         .user_agent("skillbox")
@@ -1575,6 +1648,24 @@ fn sanitize_name(name: &str) -> String {
 mod tests {
     use super::*;
 
+    fn test_remote_registry() -> RemoteRegistry {
+        RemoteRegistry {
+            owner: Some("hhushhas".to_string()),
+            repo: "skillbox-registry".to_string(),
+            reference: Some("main".to_string()),
+        }
+    }
+
+    fn test_registry_skill(description: &str, path: &str) -> SkillEntry {
+        SkillEntry {
+            category: "frontend".to_string(),
+            description: description.to_string(),
+            path: path.to_string(),
+            aliases: Vec::new(),
+            resources: Vec::new(),
+        }
+    }
+
     #[test]
     fn external_ref_parser_accepts_three_segments_only() {
         assert_eq!(
@@ -1684,6 +1775,60 @@ mod tests {
     }
 
     #[test]
+    fn config_without_registries_yields_no_remote_registries() {
+        let config = serde_yaml::from_str::<Config>("{}").expect("parse config");
+        assert!(registries_from_config(Some(config)).is_empty());
+
+        let config = serde_yaml::from_str::<Config>("registries: []").expect("parse config");
+
+        assert!(registries_from_config(Some(config)).is_empty());
+        assert!(registries_from_config(None).is_empty());
+    }
+
+    #[test]
+    fn project_registry_shadows_global_registry() {
+        let project_root = PathBuf::from("/project");
+        let global_root = PathBuf::from("/home/user/.skillbox");
+        let mut project_skills = BTreeMap::new();
+        project_skills.insert(
+            "frontend".to_string(),
+            test_registry_skill(
+                "Project frontend guidance",
+                ".agents/skills.available/frontend",
+            ),
+        );
+        let mut global_skills = BTreeMap::new();
+        global_skills.insert(
+            "frontend".to_string(),
+            test_registry_skill("Global frontend guidance", "skills/frontend"),
+        );
+        let mut merged = BTreeMap::<String, ResolvedSkill>::new();
+
+        merge_registry_skills(
+            &mut merged,
+            RegistryFile {
+                version: 1,
+                skills: project_skills,
+            },
+            Source::Project { root: project_root },
+        )
+        .expect("merge project");
+        merge_registry_skills(
+            &mut merged,
+            RegistryFile {
+                version: 1,
+                skills: global_skills,
+            },
+            Source::Global { root: global_root },
+        )
+        .expect("merge global");
+
+        let skill = merged.get("frontend").expect("merged skill");
+        assert_eq!(skill.entry.description, "Project frontend guidance");
+        assert!(matches!(skill.source, Source::Project { .. }));
+    }
+
+    #[test]
     fn list_line_omits_category_when_category_filter_is_active() {
         let skill = ResolvedSkill {
             name: "frontend".to_string(),
@@ -1695,7 +1840,7 @@ mod tests {
                 resources: Vec::new(),
             },
             source: Source::Remote {
-                registry: default_remote_registry(),
+                registry: test_remote_registry(),
             },
         };
 
@@ -1721,7 +1866,7 @@ mod tests {
                 resources: vec!["refs".to_string(), "scripts".to_string()],
             },
             source: Source::Remote {
-                registry: default_remote_registry(),
+                registry: test_remote_registry(),
             },
         };
 
@@ -1744,7 +1889,7 @@ mod tests {
                 resources: vec!["rules".to_string()],
             },
             source: Source::Remote {
-                registry: default_remote_registry(),
+                registry: test_remote_registry(),
             },
         };
 
@@ -1766,7 +1911,7 @@ mod tests {
                 resources: Vec::new(),
             },
             source: Source::Remote {
-                registry: default_remote_registry(),
+                registry: test_remote_registry(),
             },
         };
 
@@ -1786,7 +1931,7 @@ mod tests {
                 resources: Vec::new(),
             },
             source: Source::Remote {
-                registry: default_remote_registry(),
+                registry: test_remote_registry(),
             },
         };
 

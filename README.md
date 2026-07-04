@@ -54,7 +54,7 @@ skillbox doctor
 
 ## skills.sh on demand
 
-The registry stays the primary, trusted path — but you can reach the whole [skills.sh](https://skills.sh) directory without leaving the CLI:
+Local registries stay the trusted path, but you can reach the whole [skills.sh](https://skills.sh) directory without leaving the CLI:
 
 ```bash
 skillbox search react --web                                      # search the skills.sh directory
@@ -63,20 +63,28 @@ skillbox add vercel-labs/agent-skills/vercel-react-best-practices             # 
 skillbox remove vercel-react-best-practices                      # drop it again
 ```
 
-`--web` is always explicit, and external content is always marked unverified — nothing from skills.sh enters a conversation unless you (or your agent, at your instruction) ask for it by full `owner/repo/skill` id. `add` records the skill in `~/.config/skillbox/installed.yaml`; from then on it resolves by short name like any other skill, listed under the `external` category, fetched fresh from its source repo on demand.
+`--web` is always explicit, and external content is always marked unverified — nothing from skills.sh enters a conversation unless you (or your agent, at your instruction) ask for it by full `owner/repo/skill` id. `add` records the skill in `~/.skillbox/installed.yaml`; from then on it resolves by short name like any other skill, listed under the `external` category, fetched fresh from its source repo on demand.
 
-External skills are unvetted third-party instructions. Skim `skillbox fetch <ref> --print` before letting an agent load one, and promote skills you rely on into your registry.
+External skills are unvetted third-party instructions. Skim `skillbox fetch <ref> --print` before letting an agent load one, and promote skills you rely on into your local registry.
 
 ## Registries
 
 Skillbox resolves skills in order:
 
 1. The nearest project registry: `.agents/skillbox.yaml`
-2. Installed external skills: `~/.config/skillbox/installed.yaml`
-3. Remote registries from `~/.config/skillbox/config.yaml`
-4. The default shared registry: `hhushhas/skillbox-registry`
+2. The global local registry: `~/.skillbox/skillbox.yaml`
+3. Installed external skills: `~/.skillbox/installed.yaml`
+4. Remote registries from `~/.skillbox/config.yaml`
 
-For reusable skills, work in a local checkout of the registry repo rather than adding one-off local config.
+The global registry is the default home for personal skills: offline, private, and resolved from `~/.skillbox`. A conventional entry points at `~/.skillbox/skills/<skill-name>/SKILL.md`.
+
+Remote registries are explicit opt-in. To add the shared Skillbox registry, create `~/.skillbox/config.yaml`:
+
+```yaml
+registries:
+  - owner: hhushhas
+    repo: skillbox-registry
+```
 
 Registry entries can include aliases to improve natural-language search:
 
@@ -103,7 +111,14 @@ skills:
 
 ## Adding skills
 
-Reusable skills live in the public registry, `hhushhas/skillbox-registry`. Project skills live with the project:
+Reusable personal skills live in the global local registry:
+
+```text
+~/.skillbox/skillbox.yaml
+~/.skillbox/skills/<skill-name>/SKILL.md
+```
+
+Project skills live with the project and shadow global skills with the same name:
 
 ```text
 repo/.agents/skillbox.yaml
@@ -112,8 +127,8 @@ repo/.agents/skills.available/<skill-name>/SKILL.md
 
 To add a reusable skill:
 
-1. Add `skills/<skill-name>/SKILL.md` to the registry repo, with any support files (`references/`, `scripts/`, `assets/`, `agents/`) in the same folder.
-2. Add the skill to `registry.yaml`: pick one category from the fixed list, write a canonical one-line description, and add aliases for natural-language search.
+1. Add `~/.skillbox/skills/<skill-name>/SKILL.md`, with any support files (`references/`, `scripts/`, `assets/`, `agents/`) in the same folder.
+2. Add the skill to `~/.skillbox/skillbox.yaml`: pick one category from the fixed list, write a canonical one-line description, and add aliases for natural-language search.
 3. Add `resources` when the skill has support folders.
 4. Verify with `skillbox doctor`, `skillbox search "<query>"`, and `skillbox fetch <skill-name> --print` or `--to-temp`.
 
@@ -121,24 +136,21 @@ To update an existing skill, run `skillbox info <skill-name>` to find its regist
 
 ### Importing from skills.sh
 
-For personal use, `skillbox add owner/repo/skill` is enough. To promote a skill into a shared registry, treat the `skills.sh` URL as a discovery page, not the canonical source — never scrape rendered `skills.sh` HTML as the skill artifact.
+For personal use, `skillbox add owner/repo/skill` is enough. To promote a skill into your global registry or a shared remote registry, treat the `skills.sh` URL as a discovery page, not the canonical source — never scrape rendered `skills.sh` HTML as the skill artifact.
 
 1. Find the backing GitHub repo/path on the `skills.sh` page (or via `skillbox search <query> --web`).
-2. Fetch the raw GitHub `SKILL.md` and copy it (plus sibling support folders) into `skills/<skill-name>/`.
-3. Add a normalized entry to `registry.yaml`, then verify and publish:
+2. Fetch the raw GitHub `SKILL.md` and copy it (plus sibling support folders) into `~/.skillbox/skills/<skill-name>/` or the shared registry's skills folder.
+3. Add a normalized entry to `~/.skillbox/skillbox.yaml` or the shared registry file, then verify:
 
 ```bash
-ruby -e 'require "yaml"; YAML.load_file("registry.yaml"); puts "ok"'
+ruby -e 'require "yaml"; YAML.load_file(File.expand_path("~/.skillbox/skillbox.yaml")); puts "ok"'
 skillbox search "<natural query>"
 skillbox fetch <skill-name> --print
-git add registry.yaml skills/<skill-name>
-git commit -m "Add <skill-name> skill"
-git push
 ```
 
 ### Canonical descriptions
 
-`registry.yaml` descriptions are the model-facing discovery text. One line, 70–150 characters, starting with a practical capability — no hype ("comprehensive", "ultimate"), no implementation history or install notes. Preferred shape:
+Registry descriptions are the model-facing discovery text. One line, 70–150 characters, starting with a practical capability — no hype ("comprehensive", "ultimate"), no implementation history or install notes. Preferred shape:
 
 ```text
 <capability/action> for <domain/task>; use when <trigger or situation>.
