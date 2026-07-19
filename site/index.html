@@ -173,7 +173,7 @@
     </section>
 
     <section>
-      <p class="label">The whole ecosystem, one flag away</p>
+      <p class="label">The whole ecosystem, explicitly available</p>
       <div class="features">
         <div class="feature">
           <h3>Search skills.sh without leaving the CLI</h3>
@@ -188,12 +188,11 @@
 
     <section>
       <p class="label">Try it</p>
-<pre><span class="p">$</span> skillbox list "design for chatbot"
-<span class="p">$</span> skillbox search effect
-<span class="p">$</span> skillbox fetch frontend --print
+<pre><span class="p">$</span> skillbox list --category frontend
+<span class="p">$</span> skillbox search "design for chatbot"
+<span class="p">$</span> skillbox fetch frontend
 <span class="p">$</span> skillbox info frontend
-<span class="c"># pull a skill into a temp dir for the agent to use</span>
-<span class="p">$</span> skillbox fetch frontend --to-temp
+<span class="c"># fetch prints SKILL.md and prepares support files in temp automatically</span>
 <span class="c"># reach the skills.sh directory on demand</span>
 <span class="p">$</span> skillbox search react --web
 <span class="p">$</span> skillbox add vercel-labs/agent-skills/vercel-react-best-practices</pre>

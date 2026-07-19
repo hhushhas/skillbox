@@ -38,9 +38,9 @@ struct Cli {
 enum Command {
     /// List available skills.
     List(ListArgs),
-    /// Search skills with a natural-language query.
-    Search(ListArgs),
-    /// Fetch a skill as markdown or a temporary folder.
+    /// Search registries, or search skills.sh with --web.
+    Search(SearchArgs),
+    /// Print a skill and prepare any support files in temp.
     Fetch(FetchArgs),
     /// Show where a skill lives and how to update it.
     Info(InfoArgs),
@@ -60,15 +60,26 @@ enum Command {
 
 #[derive(Args)]
 struct ListArgs {
-    /// Optional natural-language search query.
-    query: Vec<String>,
     /// Limit output to a category.
     #[arg(long, value_parser = parse_category)]
     category: Option<String>,
     /// Print only skill names.
     #[arg(long)]
     names: bool,
-    /// Search the skills.sh public directory instead of registries.
+}
+
+#[derive(Args)]
+struct SearchArgs {
+    /// Natural-language search query.
+    #[arg(required = true)]
+    query: Vec<String>,
+    /// Limit registry results to a category.
+    #[arg(long, value_parser = parse_category)]
+    category: Option<String>,
+    /// Print only skill names.
+    #[arg(long)]
+    names: bool,
+    /// Search the public skills.sh directory instead of trusted registries.
     #[arg(long)]
     web: bool,
 }
@@ -77,12 +88,6 @@ struct ListArgs {
 struct FetchArgs {
     /// Skill name from the registry.
     name: String,
-    /// Print only SKILL.md.
-    #[arg(long, conflicts_with = "to_temp")]
-    print: bool,
-    /// Copy or download the full skill folder to temp and print its path.
-    #[arg(long)]
-    to_temp: bool,
 }
 
 #[derive(Args)]
@@ -208,6 +213,7 @@ struct ExternalSkill {
     branch: String,
     path: String,
     markdown: String,
+    archive: Vec<u8>,
 }
 
 fn main() {
@@ -220,13 +226,11 @@ fn main() {
 fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command.unwrap_or(Command::List(ListArgs {
-        query: Vec::new(),
         category: None,
         names: false,
-        web: false,
     })) {
         Command::List(args) => list(args),
-        Command::Search(args) => list(args),
+        Command::Search(args) => search(args),
         Command::Fetch(args) => fetch(args),
         Command::Info(args) => info(args),
         Command::Add(args) => add(args),
@@ -239,41 +243,60 @@ fn run() -> Result<()> {
 }
 
 fn list(args: ListArgs) -> Result<()> {
+    let skills = load_skills()?;
+    let no_skills_loaded = skills.is_empty();
+    let filtered_by_category = args.category.is_some();
+
+    let matches = skills
+        .into_iter()
+        .filter(|skill| category_matches(skill, args.category.as_deref()))
+        .collect::<Vec<_>>();
+
+    if args.names {
+        println!(
+            "{}",
+            matches
+                .iter()
+                .map(|skill| skill.name.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+    } else {
+        for skill in matches {
+            println!("{}", format_list_line(&skill, filtered_by_category));
+        }
+    }
+    if no_skills_loaded {
+        print_empty_registry_hint();
+    }
+    Ok(())
+}
+
+fn search(args: SearchArgs) -> Result<()> {
     if args.web {
-        return list_web(args);
+        return search_web(args);
     }
 
     let skills = load_skills()?;
     let no_skills_loaded = skills.is_empty();
     let filtered_by_category = args.category.is_some();
-
-    let mut matches = Vec::new();
     let query = args.query.join(" ");
     let query_tokens = query_tokens(&query);
-
-    for skill in skills
+    let mut matches = skills
         .into_iter()
         .filter(|skill| category_matches(skill, args.category.as_deref()))
-    {
-        if query_tokens.is_empty() {
-            matches.push((0, skill));
-            continue;
-        }
+        .filter_map(|skill| {
+            let score = search_score(&skill, &query, &query_tokens);
+            (score > 0).then_some((score, skill))
+        })
+        .collect::<Vec<_>>();
 
-        let score = search_score(&skill, &query, &query_tokens);
-        if score > 0 {
-            matches.push((score, skill));
-        }
-    }
-
-    if !query_tokens.is_empty() {
-        matches.sort_by(|(left_score, left_skill), (right_score, right_skill)| {
-            right_score
-                .cmp(left_score)
-                .then_with(|| left_skill.name.cmp(&right_skill.name))
-        });
-        matches.truncate(MAX_SEARCH_RESULTS);
-    }
+    matches.sort_by(|(left_score, left_skill), (right_score, right_skill)| {
+        right_score
+            .cmp(left_score)
+            .then_with(|| left_skill.name.cmp(&right_skill.name))
+    });
+    matches.truncate(MAX_SEARCH_RESULTS);
 
     if args.names {
         println!(
@@ -295,7 +318,7 @@ fn list(args: ListArgs) -> Result<()> {
     Ok(())
 }
 
-fn list_web(args: ListArgs) -> Result<()> {
+fn search_web(args: SearchArgs) -> Result<()> {
     let query = args.query.join(" ");
     let url = format!("https://skills.sh/api/search?q={}", percent_encode(&query));
     let body = fetch_text(&url)?;
@@ -303,7 +326,7 @@ fn list_web(args: ListArgs) -> Result<()> {
         .with_context(|| format!("failed to parse skills.sh response from {}", url))?;
 
     eprintln!(
-        "note: unvetted third-party content from skills.sh; load with skillbox fetch <id> --print."
+        "note: unvetted third-party content from skills.sh; load with `skillbox fetch <owner/repo/skill>`."
     );
 
     let skills = response
@@ -448,12 +471,8 @@ fn token_synonyms(token: &str) -> Vec<&'static str> {
 }
 
 fn fetch(args: FetchArgs) -> Result<()> {
-    if !args.print && !args.to_temp {
-        bail!("choose one: --print or --to-temp");
-    }
-
     if let Some(reference) = parse_external_ref(&args.name)? {
-        return fetch_external(args, reference);
+        return fetch_external(reference);
     }
 
     let skill = load_skills()?
@@ -461,54 +480,73 @@ fn fetch(args: FetchArgs) -> Result<()> {
         .find(|skill| skill.name == args.name)
         .ok_or_else(|| anyhow!("unknown skill '{}'", args.name))?;
 
-    if args.print {
+    if let Source::Installed { source, path } = &skill.source {
+        let external = resolve_installed_skill(&skill.name, source, path)?;
         warn_unverified_if_external(&skill);
-        if !skill.entry.resources.is_empty() {
-            eprintln!(
-                "note: {} has {}; use `skillbox fetch {} --to-temp` for the full skill folder.",
-                skill.name,
-                skill.entry.resources.join(","),
-                skill.name
-            );
-        }
-        let markdown = read_skill_markdown(&skill)?;
-        eprintln!(
-            "tokens: ~{} ({} chars)",
-            approximate_tokens(&markdown),
-            markdown.chars().count()
-        );
-        print!("{markdown}");
-        return Ok(());
+        return fetch_archived_skill(external);
     }
 
     warn_unverified_if_external(&skill);
-    let destination = copy_skill_to_temp(&skill)?;
-    println!("{}", destination.display());
+    let markdown = read_skill_markdown(&skill)?;
+    if let Some((destination, resources)) = prepare_support_files(&skill)? {
+        print_support_suggestion(&destination, &resources)?;
+    }
+    print_skill_markdown(&markdown);
     Ok(())
 }
 
-fn fetch_external(args: FetchArgs, reference: ExternalRef) -> Result<()> {
+fn fetch_external(reference: ExternalRef) -> Result<()> {
     let skill = resolve_external_skill(&reference)?;
     eprintln!("warning: external skill from skills.sh — unverified third-party content");
+    fetch_archived_skill(skill)
+}
 
-    if args.print {
-        eprintln!(
-            "tokens: ~{} ({} chars)",
-            approximate_tokens(&skill.markdown),
-            skill.markdown.chars().count()
-        );
-        print!("{}", skill.markdown);
-        return Ok(());
+fn fetch_archived_skill(skill: ExternalSkill) -> Result<()> {
+    let destination = create_skill_temp_dir(&skill.reference.skill_id)?;
+    copy_external_skill_to_temp(&skill, destination.path())?;
+    let resources = resource_entries(destination.path())?;
+    if !resources.is_empty() {
+        let destination = destination.keep();
+        print_support_suggestion(&destination, &resources)?;
+    }
+    print_skill_markdown(&skill.markdown);
+    Ok(())
+}
+
+fn prepare_support_files(skill: &ResolvedSkill) -> Result<Option<(PathBuf, Vec<String>)>> {
+    if skill.entry.resources.is_empty() {
+        return Ok(None);
     }
 
-    let destination = temp_root().join(format!(
-        "{}-{}",
-        sanitize_name(&skill.reference.skill_id),
-        Local::now().format("%Y%m%d%H%M%S")
-    ));
-    copy_external_skill_to_temp(&skill.reference, &skill.branch, &skill.path, &destination)?;
-    println!("{}", destination.display());
+    let destination = copy_skill_to_temp(skill)?;
+    let resources = skill.entry.resources.clone();
+    Ok(Some((destination, resources)))
+}
+
+fn print_support_suggestion(destination: &Path, resources: &[String]) -> Result<()> {
+    let summary = format_resource_summary(&resource_file_counts(destination, resources)?);
+    eprintln!(
+        "suggestion: this skill includes {summary}; read the support files from {}.",
+        destination.display()
+    );
     Ok(())
+}
+
+fn format_resource_summary(resources: &[(String, usize)]) -> String {
+    resources
+        .iter()
+        .map(|(name, count)| format!("{count} {} in {name}", pluralize("file", *count)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn print_skill_markdown(markdown: &str) {
+    eprintln!(
+        "tokens: ~{} ({} chars)",
+        approximate_tokens(markdown),
+        markdown.chars().count()
+    );
+    print!("{markdown}");
 }
 
 fn info(args: InfoArgs) -> Result<()> {
@@ -632,13 +670,13 @@ fn promote(args: PromoteArgs) -> Result<()> {
     let mut registry = read_registry_file_at(&registry_path)?;
 
     remove_existing_path(&destination)?;
-    copy_external_skill_to_temp(&skill.reference, &skill.branch, &skill.path, &destination)?;
+    copy_external_skill_to_temp(&skill, &destination)?;
 
     let entry = promoted_skill_entry(
         &args.category,
         &skill.markdown,
         &name,
-        resource_directories(&destination)?,
+        resource_entries(&destination)?,
     );
     validate_entry(&name, &entry)?;
     registry.skills.insert(name.clone(), entry);
@@ -669,19 +707,11 @@ fn remove(args: RemoveArgs) -> Result<()> {
 fn guide(args: GuideArgs) -> Result<()> {
     match args.topic.as_deref() {
         None => {
+            print_agent_guide();
             println!("topics: {}", GUIDE_TOPICS.join(" "));
             println!("usage: skillbox guide <topic>");
-            println!("start: skillbox guide onboarding");
         }
-        Some("agent") => {
-            println!("1. Find: skillbox search \"<task>\" or skillbox list --category <category>");
-            println!("2. Inspect: skillbox info <skill>");
-            println!("3. Load: skillbox fetch <skill> --print");
-            println!("4. Full folder: use --to-temp when resources are listed");
-            println!(
-                "5. Optional web: skillbox search \"<task>\" --web; external results are unverified; promote trusted keepers with skillbox promote <ref> --category <category>"
-            );
-        }
+        Some("agent") => print_agent_guide(),
         Some("onboarding") => {
             println!("1. Run: skillbox doctor");
             println!(
@@ -692,7 +722,10 @@ fn guide(args: GuideArgs) -> Result<()> {
                 "4. Layer project skills with .agents/skillbox.yaml; add remote registries only via ~/.skillbox/config.yaml"
             );
             println!(
-                "5. Load only when useful: skillbox fetch <skill> --print or --to-temp; skills.sh stays explicit via --web/add"
+                "5. Load only when useful: skillbox fetch <skill>; support files are prepared in temp automatically"
+            );
+            println!(
+                "6. Search skills.sh explicitly with skillbox search \"<task>\" --web; external skills are unverified"
             );
         }
         Some("registry") => {
@@ -716,7 +749,7 @@ fn guide(args: GuideArgs) -> Result<()> {
             );
             println!("4. Keep description one line; say what it does and when to use it");
             println!(
-                "5. Verify: skillbox doctor; skillbox search \"<query>\"; skillbox fetch <skill> --print"
+                "5. Verify: skillbox doctor; skillbox search \"<query>\"; skillbox fetch <skill>"
             );
         }
         Some("update-skill") => {
@@ -732,6 +765,18 @@ fn guide(args: GuideArgs) -> Result<()> {
         ),
     }
     Ok(())
+}
+
+fn print_agent_guide() {
+    println!("1. Browse: skillbox list or skillbox list --category <category>");
+    println!("2. Search: skillbox search \"<task>\"");
+    println!("3. Inspect when needed: skillbox info <skill>");
+    println!("4. Load: skillbox fetch <skill>");
+    println!(
+        "   Fetch prints SKILL.md; when support files exist, it also reports their counts and temp path."
+    );
+    println!("5. Search the public directory only when needed: skillbox search \"<task>\" --web");
+    println!("   skills.sh results are unverified; fetch them by full owner/repo/skill id.");
 }
 
 fn approximate_tokens(text: &str) -> usize {
@@ -1122,26 +1167,22 @@ fn read_skill_markdown(skill: &ResolvedSkill) -> Result<String> {
 }
 
 fn copy_skill_to_temp(skill: &ResolvedSkill) -> Result<PathBuf> {
-    let destination = temp_root().join(format!(
-        "{}-{}",
-        sanitize_name(&skill.name),
-        Local::now().format("%Y%m%d%H%M%S")
-    ));
+    let destination = create_skill_temp_dir(&skill.name)?;
 
     match &skill.source {
         Source::Project { root } | Source::Global { root } => {
             let source = root.join(&skill.entry.path);
-            copy_dir(&source, &destination)?;
+            copy_dir(&source, destination.path())?;
         }
         Source::Remote { registry } => {
-            copy_remote_skill(registry, &skill.entry.path, &destination)?;
+            copy_remote_skill(registry, &skill.entry.path, destination.path())?;
         }
         Source::Installed { source, path } => {
-            copy_installed_skill(source, path, &destination)?;
+            copy_installed_skill(source, path, destination.path())?;
         }
     }
 
-    Ok(destination)
+    Ok(destination.keep())
 }
 
 fn copy_remote_skill(
@@ -1175,6 +1216,10 @@ fn copy_remote_skill(
             .strip_prefix(trimmed)
             .context("failed to strip skill path")?;
         if inside_skill.as_os_str().is_empty() {
+            continue;
+        }
+        validate_archive_relative_path(inside_skill)?;
+        if !archive_entry_is_regular(&entry) {
             continue;
         }
         let output = destination.join(inside_skill);
@@ -1235,6 +1280,7 @@ fn resolve_external_skill(reference: &ExternalRef) -> Result<ExternalSkill> {
         branch,
         path,
         markdown,
+        archive,
     })
 }
 
@@ -1250,16 +1296,13 @@ fn resolve_promoted_skill(reference: &str) -> Result<ExternalSkill> {
         .get(reference)
         .ok_or_else(|| anyhow!("installed external skill '{}' was not found", reference))?;
 
-    resolve_installed_external_skill(reference, entry)
+    resolve_installed_skill(reference, &entry.source, &entry.path)
 }
 
-fn resolve_installed_external_skill(
-    name: &str,
-    entry: &InstalledSkillEntry,
-) -> Result<ExternalSkill> {
-    let (owner, repo) = parse_installed_source(&entry.source)?;
+fn resolve_installed_skill(name: &str, source: &str, path: &str) -> Result<ExternalSkill> {
+    let (owner, repo) = parse_installed_source(source)?;
     let (branch, archive) = fetch_repo_archive(owner, repo)?;
-    let markdown_path = format!("{}/SKILL.md", entry.path.trim_end_matches('/'));
+    let markdown_path = format!("{}/SKILL.md", path.trim_end_matches('/'));
     let markdown = read_archive_file(&archive, &markdown_path)?;
 
     Ok(ExternalSkill {
@@ -1269,8 +1312,9 @@ fn resolve_installed_external_skill(
             skill_id: name.to_string(),
         },
         branch,
-        path: entry.path.clone(),
+        path: path.to_string(),
         markdown,
+        archive,
     })
 }
 
@@ -1293,14 +1337,8 @@ fn fetch_repo_archive(owner: &str, repo: &str) -> Result<(String, Vec<u8>)> {
     }
 }
 
-fn copy_external_skill_to_temp(
-    reference: &ExternalRef,
-    branch: &str,
-    path: &str,
-    destination: &Path,
-) -> Result<()> {
-    let archive = fetch_bytes(&repo_archive_url(&reference.owner, &reference.repo, branch))?;
-    copy_skill_from_archive(&archive, path, destination)
+fn copy_external_skill_to_temp(skill: &ExternalSkill, destination: &Path) -> Result<()> {
+    copy_skill_from_archive(&skill.archive, &skill.path, destination)
 }
 
 fn copy_installed_skill(source: &str, path: &str, destination: &Path) -> Result<()> {
@@ -1336,6 +1374,10 @@ fn copy_skill_from_archive(archive: &[u8], skill_path: &str, destination: &Path)
         if inside_skill.as_os_str().is_empty() {
             continue;
         }
+        validate_archive_relative_path(inside_skill)?;
+        if !archive_entry_is_regular(&entry) {
+            continue;
+        }
 
         let output = destination.join(inside_skill);
         if let Some(parent) = output.parent() {
@@ -1355,6 +1397,22 @@ fn copy_skill_from_archive(archive: &[u8], skill_path: &str, destination: &Path)
         );
     }
     Ok(())
+}
+
+fn validate_archive_relative_path(path: &Path) -> Result<()> {
+    if path
+        .components()
+        .all(|component| matches!(component, std::path::Component::Normal(_)))
+    {
+        Ok(())
+    } else {
+        bail!("archive contains unsafe path '{}'", path.display())
+    }
+}
+
+fn archive_entry_is_regular<R: Read>(entry: &tar::Entry<'_, R>) -> bool {
+    let entry_type = entry.header().entry_type();
+    entry_type.is_file() || entry_type.is_dir()
 }
 
 fn read_installed_skill_markdown(source: &str, path: &str) -> Result<String> {
@@ -1482,19 +1540,61 @@ fn promoted_skill_entry(
     }
 }
 
-fn resource_directories(path: &Path) -> Result<Vec<String>> {
+fn resource_entries(path: &Path) -> Result<Vec<String>> {
     let mut resources = Vec::new();
     for entry in fs::read_dir(path).with_context(|| format!("failed to read {}", path.display()))? {
         let entry = entry.with_context(|| format!("failed to read {}", path.display()))?;
-        let file_type = entry
-            .file_type()
-            .with_context(|| format!("failed to read file type for {}", entry.path().display()))?;
-        if file_type.is_dir() {
-            resources.push(entry.file_name().to_string_lossy().to_string());
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name != "SKILL.md" {
+            resources.push(name);
         }
     }
     resources.sort();
     Ok(resources)
+}
+
+fn resource_file_counts(path: &Path, resources: &[String]) -> Result<Vec<(String, usize)>> {
+    resources
+        .iter()
+        .map(|resource| {
+            let resource_path = path.join(resource);
+            count_files(&resource_path).map(|count| (resource.clone(), count))
+        })
+        .collect()
+}
+
+fn count_files(path: &Path) -> Result<usize> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to inspect {}", path.display()));
+        }
+    };
+    if metadata.file_type().is_symlink() {
+        return Ok(0);
+    }
+    if metadata.is_file() {
+        return Ok(1);
+    }
+    if !metadata.is_dir() {
+        return Ok(0);
+    }
+
+    let mut count = 0;
+    for entry in fs::read_dir(path).with_context(|| format!("failed to read {}", path.display()))? {
+        let entry = entry.with_context(|| format!("failed to read {}", path.display()))?;
+        count += count_files(&entry.path())?;
+    }
+    Ok(count)
+}
+
+fn pluralize(word: &str, count: usize) -> String {
+    if count == 1 {
+        word.to_string()
+    } else {
+        format!("{word}s")
+    }
 }
 
 fn remove_installed_skill_if_present(skill: &ExternalSkill) -> Result<()> {
@@ -1546,7 +1646,12 @@ fn copy_dir(source: &Path, destination: &Path) -> Result<()> {
 }
 
 fn copy_path(source: &Path, destination: &Path) -> Result<()> {
-    if source.is_dir() {
+    let metadata = fs::symlink_metadata(source)
+        .with_context(|| format!("failed to inspect {}", source.display()))?;
+    if metadata.file_type().is_symlink() {
+        return Ok(());
+    }
+    if metadata.is_dir() {
         fs::create_dir_all(destination)
             .with_context(|| format!("failed to create {}", destination.display()))?;
         for entry in
@@ -1817,6 +1922,19 @@ fn temp_root() -> PathBuf {
     std::env::temp_dir().join("skillbox")
 }
 
+fn create_skill_temp_dir(name: &str) -> Result<tempfile::TempDir> {
+    let root = temp_root();
+    fs::create_dir_all(&root).with_context(|| format!("failed to create {}", root.display()))?;
+    tempfile::Builder::new()
+        .prefix(&format!(
+            "{}-{}-",
+            sanitize_name(name),
+            Local::now().format("%Y%m%d%H%M%S")
+        ))
+        .tempdir_in(&root)
+        .with_context(|| format!("failed to create skill temp folder in {}", root.display()))
+}
+
 fn sanitize_name(name: &str) -> String {
     name.chars()
         .map(|ch| {
@@ -1942,6 +2060,76 @@ mod tests {
     }
 
     #[test]
+    fn command_parser_keeps_list_search_and_fetch_distinct() {
+        assert!(Cli::try_parse_from(["skillbox", "list", "--category", "frontend"]).is_ok());
+        assert!(Cli::try_parse_from(["skillbox", "list", "react"]).is_err());
+        assert!(Cli::try_parse_from(["skillbox", "search"]).is_err());
+        assert!(Cli::try_parse_from(["skillbox", "search", "react", "performance"]).is_ok());
+        assert!(Cli::try_parse_from(["skillbox", "search", "react", "--web"]).is_ok());
+        assert!(Cli::try_parse_from(["skillbox", "fetch", "react"]).is_ok());
+        assert!(Cli::try_parse_from(["skillbox", "fetch", "react", "--print"]).is_err());
+        assert!(Cli::try_parse_from(["skillbox", "fetch", "react", "--to-temp"]).is_err());
+    }
+
+    #[test]
+    fn resource_summary_counts_nested_support_files() {
+        let root = tempfile::tempdir().expect("tempdir");
+        fs::create_dir_all(root.path().join("references").join("nested")).expect("references dir");
+        fs::create_dir(root.path().join("scripts")).expect("scripts dir");
+        fs::write(root.path().join("references").join("one.md"), "one").expect("reference file");
+        fs::write(
+            root.path().join("references").join("nested").join("two.md"),
+            "two",
+        )
+        .expect("nested reference file");
+        fs::write(root.path().join("scripts").join("run.sh"), "run").expect("script file");
+
+        let resources = vec!["references".to_string(), "scripts".to_string()];
+        let counts = resource_file_counts(root.path(), &resources).expect("resource counts");
+
+        assert_eq!(
+            counts,
+            vec![("references".to_string(), 2), ("scripts".to_string(), 1)]
+        );
+        assert_eq!(
+            format_resource_summary(&counts),
+            "2 files in references, 1 file in scripts"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resource_count_skips_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let destination = tempfile::tempdir().expect("destination tempdir");
+        let references = root.path().join("references");
+        fs::create_dir(&references).expect("references dir");
+        fs::write(references.join("notes.md"), "notes").expect("reference file");
+        symlink("..", references.join("loop")).expect("loop symlink");
+        symlink("notes.md", references.join("notes-link.md")).expect("file symlink");
+
+        assert_eq!(count_files(&references).expect("resource count"), 1);
+        copy_dir(root.path(), destination.path()).expect("copy skill");
+        assert!(!destination.path().join("references").join("loop").exists());
+        assert!(
+            !destination
+                .path()
+                .join("references")
+                .join("notes-link.md")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn archive_paths_must_stay_relative() {
+        assert!(validate_archive_relative_path(Path::new("references/notes.md")).is_ok());
+        assert!(validate_archive_relative_path(Path::new("../escape.md")).is_err());
+        assert!(validate_archive_relative_path(Path::new("references/../escape.md")).is_err());
+    }
+
+    #[test]
     fn category_parser_rejects_unknown_categories() {
         assert_eq!(
             parse_category("frontend").expect("known category"),
@@ -1965,13 +2153,14 @@ mod tests {
     }
 
     #[test]
-    fn promoted_entry_uses_markdown_description_and_resource_directories() {
+    fn promoted_entry_uses_markdown_description_and_resource_entries() {
         let root = tempfile::tempdir().expect("tempdir");
         fs::create_dir(root.path().join("scripts")).expect("scripts dir");
         fs::create_dir(root.path().join("references")).expect("references dir");
         fs::write(root.path().join("SKILL.md"), "# Example").expect("skill file");
+        fs::write(root.path().join("template.html"), "template").expect("support file");
 
-        let resources = resource_directories(root.path()).expect("resources");
+        let resources = resource_entries(root.path()).expect("resources");
         let entry = promoted_skill_entry(
             "ai",
             "---\ndescription: Use for careful agent orchestration.\n---\n# Fallback",
@@ -1985,7 +2174,11 @@ mod tests {
         assert!(entry.aliases.is_empty());
         assert_eq!(
             entry.resources,
-            vec!["references".to_string(), "scripts".to_string()]
+            vec![
+                "references".to_string(),
+                "scripts".to_string(),
+                "template.html".to_string()
+            ]
         );
     }
 

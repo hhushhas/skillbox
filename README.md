@@ -41,12 +41,11 @@ cp target/release/skillbox ~/bin/skillbox
 
 ```bash
 skillbox list                        # everything
-skillbox list "design for chatbot"   # natural-language query
 skillbox list --category frontend
-skillbox search effect               # keyword search
+skillbox search "design for chatbot" # natural-language registry search
+skillbox search react --web          # explicit skills.sh search (unverified)
 skillbox info frontend               # where a skill comes from
-skillbox fetch frontend --print      # print SKILL.md to stdout
-skillbox fetch frontend --to-temp    # pull skill + support files into a temp dir
+skillbox fetch frontend              # print SKILL.md; prepare support files in temp
 skillbox guide                       # agent-facing usage guide
 skillbox cleanup
 skillbox doctor
@@ -57,16 +56,16 @@ skillbox doctor
 Local registries stay the trusted path, but you can reach the whole [skills.sh](https://skills.sh) directory without leaving the CLI:
 
 ```bash
-skillbox search react --web                                      # search the skills.sh directory
-skillbox fetch vercel-labs/agent-skills/vercel-react-best-practices --print   # use once, right now
-skillbox add vercel-labs/agent-skills/vercel-react-best-practices             # keep it
-skillbox promote vercel-react-best-practices --category frontend              # trust it locally
-skillbox remove vercel-react-best-practices                      # drop it again
+skillbox search react --web                                            # discover unverified skills
+skillbox fetch vercel-labs/agent-skills/vercel-react-best-practices    # use once, right now
+skillbox add vercel-labs/agent-skills/vercel-react-best-practices      # keep it
+skillbox promote vercel-react-best-practices --category frontend       # trust it locally
+skillbox remove vercel-react-best-practices                            # drop it again
 ```
 
 `--web` is always explicit, and external content is always marked unverified — nothing from skills.sh enters a conversation unless you (or your agent, at your instruction) ask for it by full `owner/repo/skill` id. `add` records the skill in `~/.skillbox/installed.yaml`; from then on it resolves by short name like any other skill, listed under the `external` category, fetched fresh from its source repo on demand.
 
-External skills are unvetted third-party instructions. Skim `skillbox fetch <ref> --print` before letting an agent load one, and promote skills you rely on into your local registry with `skillbox promote <ref> --category <category>`.
+External skills are unvetted third-party instructions. Skim the output of `skillbox fetch <ref>` before following it, and promote skills you rely on into your local registry with `skillbox promote <ref> --category <category>`.
 
 ## Registries
 
@@ -98,7 +97,7 @@ skills:
     aliases: [react, nextjs, hooks, components]
 ```
 
-Entries can also include resource markers, which appear in `skillbox list` so agents know when to prefer `--to-temp`:
+Entries can also include resource markers for support files or directories, which appear in `skillbox list`. When `skillbox fetch <skill>` sees these markers, it copies the full skill folder to Skillbox's temp directory, prints `SKILL.md`, and writes a suggestion to stderr with the file counts and exact support-file path:
 
 ```yaml
 skills:
@@ -130,8 +129,8 @@ To add a reusable skill:
 
 1. Add `~/.skillbox/skills/<skill-name>/SKILL.md`, with any support files (`references/`, `scripts/`, `assets/`, `agents/`) in the same folder.
 2. Add the skill to `~/.skillbox/skillbox.yaml`: pick one category from the fixed list, write a canonical one-line description, and add aliases for natural-language search.
-3. Add `resources` when the skill has support folders.
-4. Verify with `skillbox doctor`, `skillbox search "<query>"`, and `skillbox fetch <skill-name> --print` or `--to-temp`.
+3. Add `resources` when the skill has support files or folders.
+4. Verify with `skillbox doctor`, `skillbox search "<query>"`, and `skillbox fetch <skill-name>`.
 
 To update an existing skill, run `skillbox info <skill-name>` to find its registry, edit the entry and skill folder, then run the same verification commands.
 
@@ -146,7 +145,7 @@ For personal use, `skillbox add owner/repo/skill` is enough. To promote a skill 
 ```bash
 ruby -e 'require "yaml"; YAML.load_file(File.expand_path("~/.skillbox/skillbox.yaml")); puts "ok"'
 skillbox search "<natural query>"
-skillbox fetch <skill-name> --print
+skillbox fetch <skill-name>
 ```
 
 ### Canonical descriptions
