@@ -123,7 +123,6 @@ impl SetupPaths {
 struct ClaudeState {
     detected: bool,
     settings: Option<Value>,
-    settings_have_hooks: bool,
     hook_matches: bool,
 }
 
@@ -161,10 +160,12 @@ pub fn run(args: SetupArgs) -> Result<()> {
         };
         match result {
             Ok(report) => {
-                failed |= matches!(
-                    report.status,
-                    SetupStatus::NotDetected | SetupStatus::NeedsDependency
-                );
+                if !args.status {
+                    failed |= matches!(
+                        report.status,
+                        SetupStatus::NotDetected | SetupStatus::NeedsDependency
+                    );
+                }
                 reports.push(report);
             }
             Err(error) => {
@@ -314,7 +315,11 @@ fn status_harness(harness: Harness, paths: &SetupPaths) -> Result<HarnessReport>
             let state = claude_state(paths)?;
             claude_report(
                 paths,
-                state.hook_matches && state.settings_have_hooks,
+                state.hook_matches
+                    && state
+                        .settings
+                        .as_ref()
+                        .is_some_and(|settings| has_usable_claude_hooks(settings, paths)),
                 false,
             )
         }
@@ -357,13 +362,16 @@ fn configure_claude(paths: &SetupPaths, dry_run: bool) -> Result<HarnessReport> 
     }
 
     let hook_matches = state.hook_matches;
-    let settings_have_hooks = state.settings_have_hooks;
-    if hook_matches && settings_have_hooks {
+    let node = command_path("node");
+    let settings_have_current_hooks = state
+        .settings
+        .as_ref()
+        .is_some_and(|settings| has_usable_claude_hooks(settings, paths));
+    if hook_matches && settings_have_current_hooks {
         return claude_report(paths, true, false);
     }
 
-    let node = command_path("node");
-    if !settings_have_hooks && node.is_none() {
+    if node.is_none() {
         return Ok(HarnessReport {
             harness: Harness::ClaudeCode,
             detected: true,
@@ -377,32 +385,30 @@ fn configure_claude(paths: &SetupPaths, dry_run: bool) -> Result<HarnessReport> 
 
     let mut settings = state.settings.unwrap_or_else(|| Value::Object(Map::new()));
     let mut settings_changed = false;
-    if !settings_have_hooks {
-        let node =
-            node.ok_or_else(|| anyhow!("Node.js is required to install the Claude Code hook"))?;
-        let command = |event: &str| {
-            format!(
-                "{} {} {}",
-                shell_quote(&node),
-                shell_quote(&paths.claude_hook),
-                event
-            )
-        };
-        settings_changed |= add_command_hook(
-            &mut settings,
-            "SessionStart",
-            None,
-            &command("session-start"),
-        )?;
-        settings_changed |= add_command_hook(
-            &mut settings,
-            "PreToolUse",
-            Some("Bash"),
-            &command("pre-tool-use"),
-        )?;
-        settings_changed |=
-            add_command_hook(&mut settings, "SessionEnd", None, &command("session-end"))?;
-    }
+    let node =
+        node.ok_or_else(|| anyhow!("Node.js is required to install the Claude Code hook"))?;
+    let command = |event: &str| {
+        format!(
+            "{} {} {}",
+            shell_quote(&node),
+            shell_quote(&paths.claude_hook),
+            event
+        )
+    };
+    settings_changed |= add_command_hook(
+        &mut settings,
+        "SessionStart",
+        None,
+        &command("session-start"),
+    )?;
+    settings_changed |= add_command_hook(
+        &mut settings,
+        "PreToolUse",
+        Some("Bash"),
+        &command("pre-tool-use"),
+    )?;
+    settings_changed |=
+        add_command_hook(&mut settings, "SessionEnd", None, &command("session-end"))?;
 
     if dry_run {
         return Ok(HarnessReport {
@@ -569,7 +575,6 @@ fn claude_state(paths: &SetupPaths) -> Result<ClaudeState> {
     } else {
         None
     };
-    let settings_have_hooks = settings.as_ref().is_some_and(has_claude_hooks);
     let hook_matches = if paths.claude_hook.exists() {
         fs::read_to_string(&paths.claude_hook)
             .with_context(|| format!("failed to read {}", paths.claude_hook.display()))?
@@ -580,7 +585,6 @@ fn claude_state(paths: &SetupPaths) -> Result<ClaudeState> {
     Ok(ClaudeState {
         detected: harness_detected(Harness::ClaudeCode, paths),
         settings,
-        settings_have_hooks,
         hook_matches,
     })
 }
@@ -605,17 +609,18 @@ fn pi_state(paths: &SetupPaths) -> Result<PiState> {
     })
 }
 
-fn has_claude_hooks(settings: &Value) -> bool {
-    has_command_hook(settings, "SessionStart", None, "session-start")
-        && has_command_hook(settings, "PreToolUse", Some("Bash"), "pre-tool-use")
-        && has_command_hook(settings, "SessionEnd", None, "session-end")
+fn has_usable_claude_hooks(settings: &Value, paths: &SetupPaths) -> bool {
+    has_usable_command_hook(settings, "SessionStart", None, "session-start", paths)
+        && has_usable_command_hook(settings, "PreToolUse", Some("Bash"), "pre-tool-use", paths)
+        && has_usable_command_hook(settings, "SessionEnd", None, "session-end", paths)
 }
 
-fn has_command_hook(
+fn has_usable_command_hook(
     settings: &Value,
     event: &str,
     matcher: Option<&str>,
     event_argument: &str,
+    paths: &SetupPaths,
 ) -> bool {
     let Some(groups) = settings
         .get("hooks")
@@ -640,19 +645,56 @@ fn has_command_hook(
                                 .get("command")
                                 .and_then(Value::as_str)
                                 .is_some_and(|command| {
-                                    command.contains(CLAUDE_HOOK_FILE)
-                                        && command_has_argument(command, event_argument)
+                                    let Some(words) = shell_words(command) else {
+                                        return false;
+                                    };
+                                    words.len() == 3
+                                        && command_executable_is_usable(&words[0])
+                                        && words[1] == paths.claude_hook.to_string_lossy()
+                                        && words[2] == event_argument
                                 })
                     })
                 })
     })
 }
 
-fn command_has_argument(command: &str, argument: &str) -> bool {
-    command
-        .split_whitespace()
-        .map(|part| part.trim_matches('\''))
-        .any(|part| part == argument)
+fn command_executable_is_usable(executable: &str) -> bool {
+    let path = Path::new(executable);
+    if path.is_absolute() {
+        path.is_file()
+    } else {
+        command_exists(executable)
+    }
+}
+
+fn shell_words(command: &str) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut in_single_quotes = false;
+    let mut escaped = false;
+    for character in command.chars() {
+        if escaped {
+            word.push(character);
+            escaped = false;
+        } else if character == '\\' && !in_single_quotes {
+            escaped = true;
+        } else if character == '\'' {
+            in_single_quotes = !in_single_quotes;
+        } else if character.is_whitespace() && !in_single_quotes {
+            if !word.is_empty() {
+                words.push(std::mem::take(&mut word));
+            }
+        } else {
+            word.push(character);
+        }
+    }
+    if escaped || in_single_quotes {
+        return None;
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    Some(words)
 }
 
 fn add_command_hook(
@@ -712,7 +754,15 @@ fn add_command_hook(
 
 fn json_contains_skillbox_extension(value: &Value) -> bool {
     match value {
-        Value::String(value) => value.contains(PI_EXTENSION_FILE),
+        Value::String(value) => {
+            let selector = value.trim();
+            !selector.starts_with('-')
+                && !selector.starts_with('!')
+                && selector
+                    .strip_prefix('+')
+                    .unwrap_or(selector)
+                    .contains(PI_EXTENSION_FILE)
+        }
         Value::Array(values) => values.iter().any(json_contains_skillbox_extension),
         Value::Object(values) => values.values().any(json_contains_skillbox_extension),
         _ => false,
@@ -948,6 +998,9 @@ mod tests {
 
     #[test]
     fn claude_setup_is_idempotent_and_preserves_settings() {
+        let Some(_node) = command_path("node") else {
+            return;
+        };
         let home = tempdir().unwrap();
         let paths =
             SetupPaths::from_home_and_pi(home.path().to_path_buf(), home.path().join("pi-agent"));
@@ -964,7 +1017,7 @@ mod tests {
         );
         let settings = read_json(&paths.claude_settings).unwrap();
         assert_eq!(settings["model"], "test-model");
-        assert!(has_claude_hooks(&settings));
+        assert!(has_usable_claude_hooks(&settings, &paths));
         assert_eq!(
             fs::read_to_string(&paths.claude_hook).unwrap(),
             CLAUDE_HOOK_SOURCE
@@ -973,6 +1026,41 @@ mod tests {
         let second = configure_claude(&paths, false).unwrap();
         assert!(!second.changed);
         assert!(matches!(second.status, SetupStatus::AlreadyConfigured));
+    }
+
+    #[test]
+    fn claude_setup_repairs_stale_hook_commands() {
+        let Some(node) = command_path("node") else {
+            return;
+        };
+        let home = tempdir().unwrap();
+        let paths =
+            SetupPaths::from_home_and_pi(home.path().to_path_buf(), home.path().join("pi-agent"));
+        fs::create_dir_all(paths.claude_settings.parent().unwrap()).unwrap();
+
+        configure_claude(&paths, false).unwrap();
+        let mut settings = read_json(&paths.claude_settings).unwrap();
+        for event in ["SessionStart", "PreToolUse", "SessionEnd"] {
+            for group in settings["hooks"][event].as_array_mut().unwrap() {
+                for hook in group["hooks"].as_array_mut().unwrap() {
+                    if let Some(command) = hook["command"].as_str() {
+                        hook["command"] = Value::String(
+                            command.replace(&shell_quote(&node), "'/missing/skillbox-node'"),
+                        );
+                    }
+                }
+            }
+        }
+        fs::write(
+            &paths.claude_settings,
+            serde_json::to_vec_pretty(&settings).unwrap(),
+        )
+        .unwrap();
+
+        let repaired = configure_claude(&paths, false).unwrap();
+        assert!(repaired.changed);
+        let settings = read_json(&paths.claude_settings).unwrap();
+        assert!(has_usable_claude_hooks(&settings, &paths));
     }
 
     #[test]
@@ -1010,6 +1098,23 @@ mod tests {
         assert!(!report.changed);
         assert!(report.configured);
         assert!(!paths.pi_extension.exists());
+    }
+
+    #[test]
+    fn disabled_pi_package_selector_does_not_count_as_configured() {
+        let home = tempdir().unwrap();
+        let pi_agent = home.path().join("pi-agent");
+        fs::create_dir_all(&pi_agent).unwrap();
+        let paths = SetupPaths::from_home_and_pi(home.path().to_path_buf(), pi_agent);
+        fs::write(
+            &paths.pi_settings,
+            r#"{"packages":[{"extensions":["-extensions/skillbox-audit.ts"]}]}"#,
+        )
+        .unwrap();
+
+        let report = configure_pi(&paths, false).unwrap();
+        assert!(report.changed);
+        assert!(paths.pi_extension.exists());
     }
 
     #[test]
