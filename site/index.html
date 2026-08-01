@@ -4,10 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Skillbox — skills loaded only when you ask</title>
-  <meta name="description" content="Skillbox keeps coding-agent skills out of the context until you ask for them. No frontmatter preloading, no accidental invocation — one CLI for every agent." />
+  <meta name="description" content="Skillbox keeps coding-agent skills out of the context until you ask for them, configures audit capture across agents, and gives you one CLI for every harness." />
   <link rel="icon" type="image/svg+xml" href="logos/skillbox.svg" />
   <meta property="og:title" content="Skillbox — skills loaded only when you ask" />
-  <meta property="og:description" content="No frontmatter preloading, no accidental invocation — one CLI for every agent." />
+  <meta property="og:description" content="No frontmatter preloading, automatic audit capture, and one CLI for every agent." />
   <meta property="og:type" content="website" />
   <meta property="og:image" content="https://skillbox.hasanshoaib.com/images/og-card.png" />
   <meta name="twitter:card" content="summary_large_image" />
@@ -117,7 +117,7 @@
 
     <header>
       <h1>Your skills. Loaded only when you ask.</h1>
-      <p class="tagline">Install a skill globally and every agent starts loading it on its own — wanted or not. Skillbox keeps skills out of the context until you say the word.</p>
+      <p class="tagline">Install a skill globally and every agent starts loading it on its own, wanted or not. Skillbox keeps skills out of the context until you say the word, then records how the skill was used.</p>
       <div class="cta">
         <a class="btn primary" href="#install">Install</a>
         <a class="btn ghost" href="https://github.com/hhushhas/skillbox" rel="noopener">GitHub</a>
@@ -158,6 +158,10 @@
           <h3>Total control</h3>
           <p>You decide when a skill enters the conversation. One CLI, every agent, zero babysitting.</p>
         </div>
+        <div class="feature">
+          <h3>Automatic audit trail</h3>
+          <p>Skillbox records list, search, info, and fetch activity with the harness and thread metadata supplied at the tool boundary.</p>
+        </div>
       </div>
     </section>
 
@@ -195,7 +199,9 @@
 <span class="c"># fetch prints SKILL.md and prepares support files in temp automatically</span>
 <span class="c"># reach the skills.sh directory on demand</span>
 <span class="p">$</span> skillbox search react --web
-<span class="p">$</span> skillbox add vercel-labs/agent-skills/vercel-react-best-practices</pre>
+<span class="p">$</span> skillbox add vercel-labs/agent-skills/vercel-react-best-practices
+<span class="p">$</span> skillbox setup --yes --harness codex,claude-code,pi
+<span class="p">$</span> skillbox audit --since 24h</pre>
     </section>
 
     <section id="install">
@@ -204,7 +210,10 @@
 <span class="p">$</span> brew install hhushhas/tap/skillbox
 
 <span class="c"># Cargo</span>
-<span class="p">$</span> cargo install --git https://github.com/hhushhas/skillbox</pre>
+<span class="p">$</span> cargo install skillbox
+
+<span class="c"># npx, with a verified native binary downloaded on first use</span>
+<span class="p">$</span> npx @hhushhas/skillbox search "browser automation"</pre>
     </section>
 
     <footer>

@@ -1,0 +1,21 @@
+{
+  "name": "@hhushhas/skillbox",
+  "version": "0.4.0",
+  "description": "Native Skillbox CLI launcher for npm and npx",
+  "license": "MIT",
+  "repository": "github:hhushhas/skillbox",
+  "homepage": "https://skillbox.hasanshoaib.com",
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "skillbox": "bin/skillbox.js"
+  },
+  "files": [
+    "bin/skillbox.js",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

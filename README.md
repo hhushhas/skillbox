@@ -27,8 +27,18 @@ brew install hhushhas/tap/skillbox
 Cargo:
 
 ```bash
-cargo install --git https://github.com/hhushhas/skillbox
+cargo install skillbox
 ```
+
+For the unreleased source tree, use `cargo install --git https://github.com/hhushhas/skillbox`.
+
+npx:
+
+```bash
+npx @hhushhas/skillbox search "browser automation"
+```
+
+The scoped npm launcher downloads and verifies the matching native release binary on first use, then forwards the same arguments as the installed `skillbox` command. The unscoped npm name `skillbox` belongs to another project, so the supported npm package is `@hhushhas/skillbox`.
 
 Prebuilt binaries for macOS, Linux, and Windows are attached to tagged releases on the [releases page](https://github.com/hhushhas/skillbox/releases). For local development:
 
@@ -54,6 +64,10 @@ skillbox audit --operation fetch --since 24h --json
 skillbox guide                       # agent-facing usage guide
 skillbox cleanup
 skillbox doctor
+
+# The npm launcher accepts the same commands:
+npx @hhushhas/skillbox setup --status
+npx @hhushhas/skillbox search "browser automation"
 ```
 
 ## Usage audit
