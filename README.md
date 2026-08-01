@@ -18,27 +18,27 @@ One CLI, every agent, zero babysitting.
 
 ## Install
 
+npm:
+
+```bash
+npm install --global @hhushhas/skillbox
+skillbox search "browser automation"
+npx @hhushhas/skillbox search "browser automation"
+```
+
+The npm launcher downloads and verifies the matching native release binary on first use. The unscoped npm name `skillbox` belongs to another project, so the supported package is `@hhushhas/skillbox`.
+
 Homebrew:
 
 ```bash
 brew install hhushhas/tap/skillbox
 ```
 
-Cargo:
+For source-tree development, install directly from Git:
 
 ```bash
-cargo install skillbox
+cargo install --git https://github.com/hhushhas/skillbox
 ```
-
-For the unreleased source tree, use `cargo install --git https://github.com/hhushhas/skillbox`.
-
-npx:
-
-```bash
-npx @hhushhas/skillbox search "browser automation"
-```
-
-The scoped npm launcher downloads and verifies the matching native release binary on first use, then forwards the same arguments as the installed `skillbox` command. The unscoped npm name `skillbox` belongs to another project, so the supported npm package is `@hhushhas/skillbox`.
 
 Prebuilt binaries for macOS, Linux, and Windows are attached to tagged releases on the [releases page](https://github.com/hhushhas/skillbox/releases). For local development:
 

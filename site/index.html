@@ -205,15 +205,17 @@
     </section>
 
     <section id="install">
-      <p class="label">Install</p>
-<pre><span class="c"># Homebrew</span>
-<span class="p">$</span> brew install hhushhas/tap/skillbox
+      <p class="label">Install with npm</p>
+      <p>npm is the fastest way to get Skillbox. Install the <code class="inline">skillbox</code> command globally, or run it once with <code class="inline">npx</code>; both use a checksum-verified native release binary.</p>
+<pre><span class="c"># Install globally</span>
+<span class="p">$</span> npm install --global @hhushhas/skillbox
+<span class="p">$</span> skillbox search "browser automation"
 
-<span class="c"># Cargo</span>
-<span class="p">$</span> cargo install skillbox
+<span class="c"># Use without a global install</span>
+<span class="p">$</span> npx @hhushhas/skillbox search "browser automation"
 
-<span class="c"># npx, with a verified native binary downloaded on first use</span>
-<span class="p">$</span> npx @hhushhas/skillbox search "browser automation"</pre>
+<span class="c"># Homebrew is also available</span>
+<span class="p">$</span> brew install hhushhas/tap/skillbox</pre>
     </section>
 
     <footer>
