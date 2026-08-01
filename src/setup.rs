@@ -1037,6 +1037,7 @@ mod tests {
         let paths =
             SetupPaths::from_home_and_pi(home.path().to_path_buf(), home.path().join("pi-agent"));
         fs::create_dir_all(paths.claude_settings.parent().unwrap()).unwrap();
+        fs::write(&paths.claude_settings, "{}").unwrap();
 
         configure_claude(&paths, false).unwrap();
         let mut settings = read_json(&paths.claude_settings).unwrap();
