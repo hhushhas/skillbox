@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Record local audit events for `list`, `search`, `info`, and `fetch`, including Codex thread detection, resolved skill metadata, and queryable JSONL history.
+- Add `skillbox audit` filters, JSONL output, bounded query retention modes, and generic `SKILLBOX_*` metadata overrides for other harnesses.
+
 ## 0.3.0 — 2026-07-19
 
 - Make `skillbox fetch <skill>` print `SKILL.md` without requiring `--print` or `--to-temp`.

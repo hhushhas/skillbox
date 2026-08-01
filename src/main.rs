@@ -10,6 +10,8 @@ use chrono::Local;
 use clap::{Args, Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 
+mod audit;
+
 const DEFAULT_REGISTRY_OWNER: &str = "hhushhas";
 const DEFAULT_REGISTRY_REF: &str = "main";
 const MAX_SEARCH_RESULTS: usize = 8;
@@ -56,6 +58,8 @@ enum Command {
     Cleanup,
     /// Check Skillbox configuration, registries, and paths.
     Doctor,
+    /// Query the local Skillbox usage audit log.
+    Audit(audit::AuditArgs),
 }
 
 #[derive(Args)]
@@ -225,24 +229,89 @@ fn main() {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
-    match cli.command.unwrap_or(Command::List(ListArgs {
+    let command = cli.command.unwrap_or(Command::List(ListArgs {
         category: None,
         names: false,
-    })) {
+    }));
+    if let Command::Audit(args) = command {
+        return audit::run(args);
+    }
+
+    let invocation = audit_invocation(&command);
+    let result = execute(command);
+    if let Some(invocation) = invocation {
+        let details = match &result {
+            Ok(details) => details.clone(),
+            Err(error) => audit::details_from_error(error),
+        };
+        if let Err(error) = audit::record(invocation, details, result.is_ok()) {
+            eprintln!("warning: failed to write Skillbox audit event: {error:#}");
+        }
+    }
+    result.map(|_| ())
+}
+
+fn execute(command: Command) -> Result<audit::Details> {
+    match command {
         Command::List(args) => list(args),
         Command::Search(args) => search(args),
         Command::Fetch(args) => fetch(args),
         Command::Info(args) => info(args),
-        Command::Add(args) => add(args),
-        Command::Promote(args) => promote(args),
-        Command::Remove(args) => remove(args),
-        Command::Guide(args) => guide(args),
-        Command::Cleanup => cleanup(),
-        Command::Doctor => doctor(),
+        Command::Add(args) => add(args).map(|_| audit::Details::default()),
+        Command::Promote(args) => promote(args).map(|_| audit::Details::default()),
+        Command::Remove(args) => remove(args).map(|_| audit::Details::default()),
+        Command::Guide(args) => guide(args).map(|_| audit::Details::default()),
+        Command::Cleanup => cleanup().map(|_| audit::Details::default()),
+        Command::Doctor => doctor().map(|_| audit::Details::default()),
+        Command::Audit(_) => unreachable!("audit command is handled before execution"),
     }
 }
 
-fn list(args: ListArgs) -> Result<()> {
+fn audit_invocation(command: &Command) -> Option<audit::Invocation> {
+    match command {
+        Command::List(args) => Some(audit::Invocation::new(
+            "list",
+            None,
+            None,
+            args.category.clone(),
+            false,
+            args.names,
+        )),
+        Command::Search(args) => Some(audit::Invocation::new(
+            "search",
+            None,
+            Some(args.query.join(" ")),
+            args.category.clone(),
+            args.web,
+            args.names,
+        )),
+        Command::Fetch(args) => Some(audit::Invocation::new(
+            "fetch",
+            Some(args.name.clone()),
+            None,
+            None,
+            false,
+            false,
+        )),
+        Command::Info(args) => Some(audit::Invocation::new(
+            "info",
+            Some(args.name.clone()),
+            None,
+            None,
+            false,
+            false,
+        )),
+        Command::Add(_)
+        | Command::Promote(_)
+        | Command::Remove(_)
+        | Command::Guide(_)
+        | Command::Cleanup
+        | Command::Doctor
+        | Command::Audit(_) => None,
+    }
+}
+
+fn list(args: ListArgs) -> Result<audit::Details> {
     let skills = load_skills()?;
     let no_skills_loaded = skills.is_empty();
     let filtered_by_category = args.category.is_some();
@@ -251,6 +320,7 @@ fn list(args: ListArgs) -> Result<()> {
         .into_iter()
         .filter(|skill| category_matches(skill, args.category.as_deref()))
         .collect::<Vec<_>>();
+    let result_count = matches.len();
 
     if args.names {
         println!(
@@ -269,10 +339,13 @@ fn list(args: ListArgs) -> Result<()> {
     if no_skills_loaded {
         print_empty_registry_hint();
     }
-    Ok(())
+    Ok(audit::Details {
+        result_count: Some(result_count),
+        ..Default::default()
+    })
 }
 
-fn search(args: SearchArgs) -> Result<()> {
+fn search(args: SearchArgs) -> Result<audit::Details> {
     if args.web {
         return search_web(args);
     }
@@ -297,6 +370,7 @@ fn search(args: SearchArgs) -> Result<()> {
             .then_with(|| left_skill.name.cmp(&right_skill.name))
     });
     matches.truncate(MAX_SEARCH_RESULTS);
+    let result_count = matches.len();
 
     if args.names {
         println!(
@@ -315,10 +389,13 @@ fn search(args: SearchArgs) -> Result<()> {
     if no_skills_loaded {
         print_empty_registry_hint();
     }
-    Ok(())
+    Ok(audit::Details {
+        result_count: Some(result_count),
+        ..Default::default()
+    })
 }
 
-fn search_web(args: SearchArgs) -> Result<()> {
+fn search_web(args: SearchArgs) -> Result<audit::Details> {
     let query = args.query.join(" ");
     let url = format!("https://skills.sh/api/search?q={}", percent_encode(&query));
     let body = fetch_text(&url)?;
@@ -334,6 +411,7 @@ fn search_web(args: SearchArgs) -> Result<()> {
         .into_iter()
         .take(MAX_SEARCH_RESULTS)
         .collect::<Vec<_>>();
+    let result_count = skills.len();
 
     if args.names {
         println!(
@@ -344,13 +422,19 @@ fn search_web(args: SearchArgs) -> Result<()> {
                 .collect::<Vec<_>>()
                 .join(" ")
         );
-        return Ok(());
+        return Ok(audit::Details {
+            result_count: Some(result_count),
+            ..Default::default()
+        });
     }
 
     for skill in skills {
         println!("{} [unverified, {} installs]", skill.id, skill.installs);
     }
-    Ok(())
+    Ok(audit::Details {
+        result_count: Some(result_count),
+        ..Default::default()
+    })
 }
 
 fn category_matches(skill: &ResolvedSkill, category: Option<&str>) -> bool {
@@ -374,6 +458,15 @@ fn format_resource_hint(skill: &ResolvedSkill) -> String {
         String::new()
     } else {
         format!("[{}]", skill.entry.resources.join(","))
+    }
+}
+
+fn source_label(source: &Source) -> String {
+    match source {
+        Source::Project { .. } => "project".to_string(),
+        Source::Global { .. } => "global".to_string(),
+        Source::Remote { registry } => format!("remote:{}", remote_registry_label(registry)),
+        Source::Installed { source, .. } => format!("installed:{source}"),
     }
 }
 
@@ -470,7 +563,7 @@ fn token_synonyms(token: &str) -> Vec<&'static str> {
     }
 }
 
-fn fetch(args: FetchArgs) -> Result<()> {
+fn fetch(args: FetchArgs) -> Result<audit::Details> {
     if let Some(reference) = parse_external_ref(&args.name)? {
         return fetch_external(reference);
     }
@@ -483,34 +576,72 @@ fn fetch(args: FetchArgs) -> Result<()> {
     if let Source::Installed { source, path } = &skill.source {
         let external = resolve_installed_skill(&skill.name, source, path)?;
         warn_unverified_if_external(&skill);
-        return fetch_archived_skill(external);
+        return fetch_archived_skill(external, source_label(&skill.source));
     }
 
     warn_unverified_if_external(&skill);
     let markdown = read_skill_markdown(&skill)?;
-    if let Some((destination, resources)) = prepare_support_files(&skill)? {
-        print_support_suggestion(&destination, &resources)?;
-    }
+    let mut details = audit::Details {
+        resolved_skill: Some(skill.name.clone()),
+        source: Some(source_label(&skill.source)),
+        content_hash: Some(audit::content_hash(&markdown)),
+        ..Default::default()
+    };
+    let resource_files = match prepare_support_files(&skill) {
+        Ok(resource_files) => resource_files,
+        Err(error) => return Err(audit::with_details(error, details.clone())),
+    };
+    let resource_count = if let Some((destination, resources)) = resource_files {
+        let resource_count = resources.len();
+        if let Err(error) = print_support_suggestion(&destination, &resources) {
+            return Err(audit::with_details(error, details.clone()));
+        }
+        Some(resource_count)
+    } else {
+        None
+    };
     print_skill_markdown(&markdown);
-    Ok(())
+    details.resource_count = resource_count;
+    Ok(details)
 }
 
-fn fetch_external(reference: ExternalRef) -> Result<()> {
+fn fetch_external(reference: ExternalRef) -> Result<audit::Details> {
     let skill = resolve_external_skill(&reference)?;
     eprintln!("warning: external skill from skills.sh — unverified third-party content");
-    fetch_archived_skill(skill)
+    let source = format!("external:{}/{}", reference.owner, reference.repo);
+    fetch_archived_skill(skill, source)
 }
 
-fn fetch_archived_skill(skill: ExternalSkill) -> Result<()> {
-    let destination = create_skill_temp_dir(&skill.reference.skill_id)?;
-    copy_external_skill_to_temp(&skill, destination.path())?;
-    let resources = resource_entries(destination.path())?;
+fn fetch_archived_skill(skill: ExternalSkill, source: String) -> Result<audit::Details> {
+    let resolved_skill = skill.reference.skill_id.clone();
+    let content_hash = audit::content_hash(&skill.markdown);
+    let mut details = audit::Details {
+        resolved_skill: Some(resolved_skill),
+        source: Some(source),
+        content_hash: Some(content_hash),
+        ..Default::default()
+    };
+    let destination = match create_skill_temp_dir(&skill.reference.skill_id) {
+        Ok(destination) => destination,
+        Err(error) => return Err(audit::with_details(error, details)),
+    };
+    if let Err(error) = copy_external_skill_to_temp(&skill, destination.path()) {
+        return Err(audit::with_details(error, details));
+    }
+    let resources = match resource_entries(destination.path()) {
+        Ok(resources) => resources,
+        Err(error) => return Err(audit::with_details(error, details)),
+    };
+    let resource_count = resources.len();
+    details.resource_count = Some(resource_count);
     if !resources.is_empty() {
         let destination = destination.keep();
-        print_support_suggestion(&destination, &resources)?;
+        if let Err(error) = print_support_suggestion(&destination, &resources) {
+            return Err(audit::with_details(error, details));
+        }
     }
     print_skill_markdown(&skill.markdown);
-    Ok(())
+    Ok(details)
 }
 
 fn prepare_support_files(skill: &ResolvedSkill) -> Result<Option<(PathBuf, Vec<String>)>> {
@@ -549,7 +680,7 @@ fn print_skill_markdown(markdown: &str) {
     print!("{markdown}");
 }
 
-fn info(args: InfoArgs) -> Result<()> {
+fn info(args: InfoArgs) -> Result<audit::Details> {
     if let Some(reference) = parse_external_ref(&args.name)? {
         return info_external(reference);
     }
@@ -612,10 +743,15 @@ fn info(args: InfoArgs) -> Result<()> {
         }
     }
 
-    Ok(())
+    Ok(audit::Details {
+        resolved_skill: Some(skill.name.clone()),
+        source: Some(source_label(&skill.source)),
+        content_hash: Some(audit::content_hash(&markdown)),
+        ..Default::default()
+    })
 }
 
-fn info_external(reference: ExternalRef) -> Result<()> {
+fn info_external(reference: ExternalRef) -> Result<audit::Details> {
     let skill = resolve_external_skill(&reference)?;
     println!("name: {}", skill.reference.skill_id);
     println!("category: external");
@@ -631,7 +767,12 @@ fn info_external(reference: ExternalRef) -> Result<()> {
     println!("source: external");
     println!("skill: {}", external_tree_url(&skill));
     println!("note: unverified third-party content");
-    Ok(())
+    Ok(audit::Details {
+        resolved_skill: Some(skill.reference.skill_id),
+        source: Some("external".to_string()),
+        content_hash: Some(audit::content_hash(&skill.markdown)),
+        ..Default::default()
+    })
 }
 
 fn add(args: AddArgs) -> Result<()> {
@@ -727,6 +868,9 @@ fn guide(args: GuideArgs) -> Result<()> {
             println!(
                 "6. Search skills.sh explicitly with skillbox search \"<task>\" --web; external skills are unverified"
             );
+            println!(
+                "7. Review local usage with skillbox audit; use --json for JSONL and --since 24h for recent activity"
+            );
         }
         Some("registry") => {
             println!("global registry: ~/.skillbox/skillbox.yaml");
@@ -738,6 +882,7 @@ fn guide(args: GuideArgs) -> Result<()> {
             println!(
                 "external installs: skillbox add owner/repo/skillId records ~/.skillbox/installed.yaml; promote with skillbox promote <skillId> --category <category>; remove with skillbox remove <skillId>"
             );
+            println!("audit log: ~/.skillbox/audit.jsonl (list/search/info/fetch activity)");
         }
         Some("add-skill") => {
             println!("1. For reusable personal skills, edit ~/.skillbox/skillbox.yaml");
@@ -775,7 +920,8 @@ fn print_agent_guide() {
     println!(
         "   Fetch prints SKILL.md; when support files exist, it also reports their counts and temp path."
     );
-    println!("5. Search the public directory only when needed: skillbox search \"<task>\" --web");
+    println!("5. Review activity: skillbox audit or skillbox audit --json");
+    println!("6. Search the public directory only when needed: skillbox search \"<task>\" --web");
     println!("   skills.sh results are unverified; fetch them by full owner/repo/skill id.");
 }
 
@@ -2038,6 +2184,16 @@ mod tests {
     }
 
     #[test]
+    fn installed_source_label_preserves_registry_origin() {
+        let source = Source::Installed {
+            source: "vercel-labs/agent-skills".to_string(),
+            path: "skills/react-best-practices".to_string(),
+        };
+
+        assert_eq!(source_label(&source), "installed:vercel-labs/agent-skills");
+    }
+
+    #[test]
     fn copy_dir_places_skill_contents_at_destination_root() {
         let source_root = tempfile::tempdir().expect("source tempdir");
         let destination_root = tempfile::tempdir().expect("destination tempdir");
@@ -2067,6 +2223,18 @@ mod tests {
         assert!(Cli::try_parse_from(["skillbox", "search", "react", "performance"]).is_ok());
         assert!(Cli::try_parse_from(["skillbox", "search", "react", "--web"]).is_ok());
         assert!(Cli::try_parse_from(["skillbox", "fetch", "react"]).is_ok());
+        assert!(
+            Cli::try_parse_from([
+                "skillbox",
+                "audit",
+                "--operation",
+                "fetch",
+                "--since",
+                "24h",
+                "--json"
+            ])
+            .is_ok()
+        );
         assert!(Cli::try_parse_from(["skillbox", "fetch", "react", "--print"]).is_err());
         assert!(Cli::try_parse_from(["skillbox", "fetch", "react", "--to-temp"]).is_err());
     }

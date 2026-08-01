@@ -46,10 +46,27 @@ skillbox search "design for chatbot" # natural-language registry search
 skillbox search react --web          # explicit skills.sh search (unverified)
 skillbox info frontend               # where a skill comes from
 skillbox fetch frontend              # print SKILL.md; prepare support files in temp
+skillbox audit                       # inspect recent list/search/info/fetch activity
+skillbox audit --operation fetch --since 24h --json
 skillbox guide                       # agent-facing usage guide
 skillbox cleanup
 skillbox doctor
 ```
+
+## Usage audit
+
+Skillbox records `list`, `search`, `info`, and `fetch` invocations in `~/.skillbox/audit.jsonl`. Each event includes the operation, outcome, timestamp, working directory, requested or resolved skill, and available source, skill hash, search result count, and harness metadata. Audit logging is local and does not block the original command; if the log cannot be written, Skillbox keeps the command result and prints a warning.
+
+Codex thread IDs are detected automatically from `CODEX_THREAD_ID`, so Codex agents do not need to pass an extra argument. Other harnesses can set these once in their launcher or session hook, and every later Skillbox command inherits them:
+
+```bash
+export SKILLBOX_HARNESS=claude-code
+export SKILLBOX_THREAD_ID=<session-id>
+export SKILLBOX_MODEL_ID=<model-id>
+export SKILLBOX_TRANSCRIPT_PATH=<transcript-path>
+```
+
+Use `skillbox audit --json` for JSONL output, or combine filters such as `--skill`, `--harness`, `--thread`, `--status`, `--operation`, `--model`, and `--since 24h`. Search queries are stored locally in raw form by default because they explain why a skill was discovered. Set `SKILLBOX_AUDIT_QUERY_MODE=hash` or `omit` when those queries should not be retained. Set `SKILLBOX_AUDIT_PATH` to use a different local log path.
 
 ## skills.sh on demand
 
