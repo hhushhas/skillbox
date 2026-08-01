@@ -46,6 +46,9 @@ skillbox search "design for chatbot" # natural-language registry search
 skillbox search react --web          # explicit skills.sh search (unverified)
 skillbox info frontend               # where a skill comes from
 skillbox fetch frontend              # print SKILL.md; prepare support files in temp
+skillbox setup                       # select and configure detected agent harnesses
+skillbox setup --harness claude-code,pi --yes
+skillbox setup --status
 skillbox audit                       # inspect recent list/search/info/fetch activity
 skillbox audit --operation fetch --since 24h --json
 skillbox guide                       # agent-facing usage guide
@@ -57,14 +60,17 @@ skillbox doctor
 
 Skillbox records `list`, `search`, `info`, and `fetch` invocations in `~/.skillbox/audit.jsonl`. Each event includes the operation, outcome, timestamp, working directory, requested or resolved skill, and available source, skill hash, search result count, and harness metadata. Audit logging is local and does not block the original command; if the log cannot be written, Skillbox keeps the command result and prints a warning.
 
-Codex thread IDs are detected automatically from `CODEX_THREAD_ID`, so Codex agents do not need to pass an extra argument. Codex model IDs are intentionally left unset. Claude Code and Pi can capture the same metadata automatically through their harness integration; other harnesses can set these once in their launcher or session hook, and every later Skillbox command inherits them:
+Run `skillbox setup` to select the detected harnesses in an interactive terminal. Use `skillbox setup --harness codex,claude-code,pi --yes` for non-interactive setup, or `skillbox setup --status` to inspect the current wiring. The command is idempotent, preserves existing Claude settings and Pi files with timestamped backups when it replaces them, and does not contact a remote service.
+
+Codex thread IDs are detected automatically from `CODEX_THREAD_ID`, so Codex agents do not need a configuration file or extra argument. Codex model IDs are intentionally left unset. Claude Code and Pi capture the same metadata automatically through their harness integration; other harnesses can set these once in their launcher or session hook, and every later Skillbox command inherits them:
 
 ```text
-Claude Code: node scripts/install-claude-hook.mjs
-Pi:          pnpm run install:setup (from the portable-pi-setup checkout)
+Codex:       built in
+Claude Code: skillbox setup --harness claude-code --yes
+Pi:          skillbox setup --harness pi --yes
 ```
 
-The Claude installer copies a maintained hook to `~/.skillbox/hooks/`, adds `SessionStart`, `PreToolUse` for Bash, and `SessionEnd` entries to `~/.claude/settings.json`, and keeps a timestamped settings backup. The hook remembers Claude's model from `SessionStart`, then patches only Bash commands that invoke Skillbox so the child shell receives the session ID, model ID, and transcript path. Pi's `skillbox-audit` extension reads its live session manager and current model at the mutable `tool_call` boundary and applies the same child-shell environment. Neither integration changes the agent prompt or requires agent-supplied flags.
+The Claude adapter writes a maintained hook to `~/.skillbox/hooks/`, adds `SessionStart`, `PreToolUse` for Bash, and `SessionEnd` entries to `~/.claude/settings.json`, and keeps a timestamped settings backup when replacing an existing file. The hook remembers Claude's model from `SessionStart`, then patches only Bash commands that invoke Skillbox so the child shell receives the session ID, model ID, and transcript path. The Pi adapter writes the conventional global extension to `~/.pi/agent/extensions/skillbox-audit.ts`; an existing package-managed Skillbox extension is recognized without adding a duplicate. The extension reads Pi's live session manager and current model at the mutable `tool_call` boundary and applies the same child-shell environment. Neither integration changes the agent prompt or requires agent-supplied flags.
 
 For a harness without an integration, set the metadata explicitly:
 

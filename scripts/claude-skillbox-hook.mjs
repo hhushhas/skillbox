@@ -6,6 +6,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -150,6 +151,12 @@ export async function main(argv = process.argv) {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await main();
+if (process.argv[1]) {
+  try {
+    if (import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
+      await main();
+    }
+  } catch {
+    // A missing entry path cannot be the main module.
+  }
 }

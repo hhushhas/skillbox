@@ -11,6 +11,7 @@ use clap::{Args, Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 
 mod audit;
+mod setup;
 
 const DEFAULT_REGISTRY_OWNER: &str = "hhushhas";
 const DEFAULT_REGISTRY_REF: &str = "main";
@@ -60,6 +61,8 @@ enum Command {
     Doctor,
     /// Query the local Skillbox usage audit log.
     Audit(audit::AuditArgs),
+    /// Configure automatic audit metadata capture for supported harnesses.
+    Setup(setup::SetupArgs),
 }
 
 #[derive(Args)]
@@ -264,6 +267,7 @@ fn execute(command: Command) -> Result<audit::Details> {
         Command::Cleanup => cleanup().map(|_| audit::Details::default()),
         Command::Doctor => doctor().map(|_| audit::Details::default()),
         Command::Audit(_) => unreachable!("audit command is handled before execution"),
+        Command::Setup(args) => setup::run(args).map(|_| audit::Details::default()),
     }
 }
 
@@ -307,7 +311,8 @@ fn audit_invocation(command: &Command) -> Option<audit::Invocation> {
         | Command::Guide(_)
         | Command::Cleanup
         | Command::Doctor
-        | Command::Audit(_) => None,
+        | Command::Audit(_)
+        | Command::Setup(_) => None,
     }
 }
 
@@ -854,22 +859,23 @@ fn guide(args: GuideArgs) -> Result<()> {
         }
         Some("agent") => print_agent_guide(),
         Some("onboarding") => {
-            println!("1. Run: skillbox doctor");
+            println!("1. Configure agent metadata capture: skillbox setup");
+            println!("2. Run: skillbox doctor");
             println!(
-                "2. Add personal skills to ~/.skillbox/skillbox.yaml with folders under ~/.skillbox/skills/"
+                "3. Add personal skills to ~/.skillbox/skillbox.yaml with folders under ~/.skillbox/skills/"
             );
-            println!("3. Explore: skillbox list; skillbox search \"<task>\"");
+            println!("4. Explore: skillbox list; skillbox search \"<task>\"");
             println!(
-                "4. Layer project skills with .agents/skillbox.yaml; add remote registries only via ~/.skillbox/config.yaml"
-            );
-            println!(
-                "5. Load only when useful: skillbox fetch <skill>; support files are prepared in temp automatically"
+                "5. Layer project skills with .agents/skillbox.yaml; add remote registries only via ~/.skillbox/config.yaml"
             );
             println!(
-                "6. Search skills.sh explicitly with skillbox search \"<task>\" --web; external skills are unverified"
+                "6. Load only when useful: skillbox fetch <skill>; support files are prepared in temp automatically"
             );
             println!(
-                "7. Review local usage with skillbox audit; use --json for JSONL and --since 24h for recent activity"
+                "7. Search skills.sh explicitly with skillbox search \"<task>\" --web; external skills are unverified"
+            );
+            println!(
+                "8. Review local usage with skillbox audit; use --json for JSONL and --since 24h for recent activity"
             );
         }
         Some("registry") => {
@@ -913,15 +919,16 @@ fn guide(args: GuideArgs) -> Result<()> {
 }
 
 fn print_agent_guide() {
-    println!("1. Browse: skillbox list or skillbox list --category <category>");
-    println!("2. Search: skillbox search \"<task>\"");
-    println!("3. Inspect when needed: skillbox info <skill>");
-    println!("4. Load: skillbox fetch <skill>");
+    println!("1. Configure harness capture when needed: skillbox setup");
+    println!("2. Browse: skillbox list or skillbox list --category <category>");
+    println!("3. Search: skillbox search \"<task>\"");
+    println!("4. Inspect when needed: skillbox info <skill>");
+    println!("5. Load: skillbox fetch <skill>");
     println!(
         "   Fetch prints SKILL.md; when support files exist, it also reports their counts and temp path."
     );
-    println!("5. Review activity: skillbox audit or skillbox audit --json");
-    println!("6. Search the public directory only when needed: skillbox search \"<task>\" --web");
+    println!("6. Review activity: skillbox audit or skillbox audit --json");
+    println!("7. Search the public directory only when needed: skillbox search \"<task>\" --web");
     println!("   skills.sh results are unverified; fetch them by full owner/repo/skill id.");
 }
 
